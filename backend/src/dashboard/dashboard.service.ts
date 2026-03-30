@@ -139,8 +139,7 @@ export class DashboardService {
         ? (ride.scoreCard.breakdownJson as Record<string, unknown>)
         : {};
 
-    const events =
-      Array.isArray(breakdownJson.events) ? breakdownJson.events : [];
+    const events = Array.isArray(breakdownJson.events) ? breakdownJson.events : [];
 
     return {
       rideId: ride.id,
@@ -175,6 +174,112 @@ export class DashboardService {
         ...breakdownJson,
         events,
       },
+    };
+  }
+
+  async getRideDetail(rideId: string) {
+    const ride = await this.prisma.ride.findUnique({
+      where: { id: rideId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
+        analytics: true,
+        scoreCard: true,
+        telemetryPoints: {
+          orderBy: { ts: 'asc' },
+          select: {
+            ts: true,
+            lat: true,
+            lng: true,
+            speedKmh: true,
+            accuracyM: true,
+            heading: true,
+            accelX: true,
+            accelY: true,
+            accelZ: true,
+          },
+        },
+        rideEvents: {
+          orderBy: { ts: 'asc' },
+          select: {
+            id: true,
+            type: true,
+            ts: true,
+            lat: true,
+            lng: true,
+            severity: true,
+            metaJson: true,
+          },
+        },
+      },
+    });
+
+    if (!ride) {
+      throw new NotFoundException('Ride not found');
+    }
+
+    return {
+      id: ride.id,
+      status: ride.status,
+      startedAt: ride.startedAt,
+      endedAt: ride.endedAt,
+      score: ride.scoreCard?.totalScore ?? ride.score ?? null,
+      confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
+      courier: ride.user,
+      analytics: ride.analytics
+        ? {
+            totalDistanceM: ride.analytics.totalDistanceM,
+            movingSeconds: ride.analytics.movingSeconds,
+            idleSeconds: ride.analytics.idleSeconds,
+            avgSpeedKmh: ride.analytics.avgSpeedKmh,
+            p95SpeedKmh: ride.analytics.p95SpeedKmh,
+            maxSpeedKmh: ride.analytics.maxSpeedKmh,
+            medianAccuracyM: ride.analytics.medianAccuracyM,
+            qualityScore: ride.analytics.qualityScore,
+            qualityFlags: ride.analytics.qualityFlags ?? [],
+          }
+        : null,
+      telemetry: ride.telemetryPoints.map((point) => ({
+        timestamp: point.ts,
+        lat: point.lat,
+        lng: point.lng,
+        speedKmh: point.speedKmh,
+        accuracyM: point.accuracyM,
+        heading: point.heading,
+        accelX: point.accelX,
+        accelY: point.accelY,
+        accelZ: point.accelZ,
+      })),
+      events: ride.rideEvents.map((event) => {
+        const meta =
+          event.metaJson && typeof event.metaJson === 'object'
+            ? (event.metaJson as Record<string, unknown>)
+            : {};
+
+        return {
+          id: event.id,
+          type: event.type,
+          timestamp: event.ts,
+          lat: event.lat,
+          lng: event.lng,
+          severity: event.severity,
+          penalty:
+            typeof meta.penalty === 'number'
+              ? meta.penalty
+              : event.type === 'harsh_brake'
+                ? 4
+                : event.type === 'harsh_accel'
+                  ? 2
+                  : event.type === 'speeding'
+                    ? 3
+                    : 0,
+        };
+      }),
     };
   }
 

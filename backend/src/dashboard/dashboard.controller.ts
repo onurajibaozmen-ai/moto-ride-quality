@@ -28,6 +28,11 @@ export class DashboardController {
     return this.dashboardService.getRideScoreBreakdown(rideId);
   }
 
+  @Get('rides/:id/detail')
+  getRideDetail(@Param('id') rideId: string) {
+    return this.dashboardService.getRideDetail(rideId);
+  }
+
   @Get('couriers')
   getCouriers() {
     return this.dashboardService.getCouriers();
