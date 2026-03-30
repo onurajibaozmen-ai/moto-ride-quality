@@ -105,22 +105,22 @@ model RideEvent {
 
 model RideAnalytics {
   id               String   @id @default(cuid())
-  rideId            String   @unique
-  sampleCount       Int      @default(0)
-  validPointCount   Int      @default(0)
-  gpsGapCount       Int      @default(0)
-  lowAccuracyCount  Int      @default(0)
-  movingSeconds     Int      @default(0)
-  idleSeconds       Int      @default(0)
-  totalDistanceM    Float    @default(0)
-  avgSpeedKmh       Float?
-  p95SpeedKmh       Float?
-  maxSpeedKmh       Float?
-  medianAccuracyM   Float?
-  qualityScore      Float?
-  qualityFlags      Json?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  rideId           String   @unique
+  sampleCount      Int      @default(0)
+  validPointCount  Int      @default(0)
+  gpsGapCount      Int      @default(0)
+  lowAccuracyCount Int      @default(0)
+  movingSeconds    Int      @default(0)
+  idleSeconds      Int      @default(0)
+  totalDistanceM   Float    @default(0)
+  avgSpeedKmh      Float?
+  p95SpeedKmh      Float?
+  maxSpeedKmh      Float?
+  medianAccuracyM  Float?
+  qualityScore     Float?
+  qualityFlags     Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   ride Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
 }

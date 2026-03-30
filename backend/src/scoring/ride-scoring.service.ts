@@ -1,13 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import {
-  Prisma,
-  ScoreConfidenceLevel,
-} from '@prisma/client';
+import { Prisma, ScoreConfidenceLevel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class RideScoringService {
-  private readonly scoringVersion = 'v3_analytics_confidence';
+  private readonly scoringVersion = 'v4_event_explainability';
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -16,7 +13,9 @@ export class RideScoringService {
       where: { id: rideId },
       include: {
         analytics: true,
-        rideEvents: true,
+        rideEvents: {
+          orderBy: { ts: 'asc' },
+        },
       },
     });
 
@@ -49,18 +48,20 @@ export class RideScoringService {
     const qualityScore = analytics?.qualityScore ?? 0;
 
     const safetyPenalty =
-      this.cappedPenalty(brakeRate, 0.2, 2.5, 24) +
-      this.cappedPenalty(accelRate, 0.2, 2.5, 16);
+      harshBrakeEvents.length * 4 +
+      harshAccelEvents.length * 2 +
+      this.cappedPenalty(brakeRate, 0.2, 2.5, 10);
 
     const compliancePenalty =
-      this.cappedPenalty(speedingRate, 0.1, 2.0, 20) +
-      this.cappedPenalty(Math.max(0, p95Speed - 55), 0, 30, 8);
+      speedingEvents.length * 3 +
+      this.cappedPenalty(speedingRate, 0.1, 2.0, 12) +
+      this.cappedPenalty(Math.max(0, p95Speed - 55), 0, 30, 6);
 
     const smoothnessPenalty =
-      this.severityWeightedPenalty(harshBrakeEvents, 10) +
-      this.severityWeightedPenalty(harshAccelEvents, 6);
+      this.severityWeightedPenalty(harshBrakeEvents, 8) +
+      this.severityWeightedPenalty(harshAccelEvents, 5);
 
-    const efficiencyPenalty = this.cappedPenalty(idleRatio, 0.12, 0.5, 18);
+    const efficiencyPenalty = this.cappedPenalty(idleRatio, 0.12, 0.5, 10);
 
     const safetyScore = this.normalizeScore(40 - safetyPenalty, 40);
     const complianceScore = this.normalizeScore(25 - compliancePenalty, 25);
@@ -80,6 +81,29 @@ export class RideScoringService {
       qualityScore,
       analytics?.qualityFlags,
     );
+
+    const eventTimeline = ride.rideEvents.map((event) => {
+      const meta =
+        event.metaJson && typeof event.metaJson === 'object'
+          ? (event.metaJson as Record<string, unknown>)
+          : {};
+
+      return {
+        type: event.type,
+        timestamp: event.ts,
+        severity: event.severity ?? 0,
+        penalty:
+          typeof meta.penalty === 'number'
+            ? meta.penalty
+            : event.type === 'harsh_brake'
+              ? 4
+              : event.type === 'harsh_accel'
+                ? 2
+                : event.type === 'speeding'
+                  ? 3
+                  : 0,
+      };
+    });
 
     const breakdown = {
       inputs: {
@@ -115,6 +139,7 @@ export class RideScoringService {
       },
       qualityFlags: analytics?.qualityFlags ?? [],
       scoringVersion: this.scoringVersion,
+      events: eventTimeline,
     };
 
     const scoreCard = await this.prisma.rideScore.upsert({
@@ -186,7 +211,7 @@ export class RideScoringService {
       return sum + Math.min(severity, 8);
     }, 0);
 
-    return this.clamp(weighted * 0.8, 0, maxPenalty);
+    return this.clamp(weighted * 0.6, 0, maxPenalty);
   }
 
   private qualityMultiplier(qualityScore: number) {

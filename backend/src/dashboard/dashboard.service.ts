@@ -136,8 +136,11 @@ export class DashboardService {
     const breakdownJson =
       ride.scoreCard?.breakdownJson &&
       typeof ride.scoreCard.breakdownJson === 'object'
-        ? ride.scoreCard.breakdownJson
+        ? (ride.scoreCard.breakdownJson as Record<string, unknown>)
         : {};
+
+    const events =
+      Array.isArray(breakdownJson.events) ? breakdownJson.events : [];
 
     return {
       rideId: ride.id,
@@ -168,10 +171,10 @@ export class DashboardService {
           .length,
         speeding: ride.rideEvents.filter((event) => event.type === 'speeding').length,
       },
-      components:
-        typeof breakdownJson === 'object' && breakdownJson !== null
-          ? (breakdownJson as Record<string, unknown>)
-          : {},
+      components: {
+        ...breakdownJson,
+        events,
+      },
     };
   }
 
