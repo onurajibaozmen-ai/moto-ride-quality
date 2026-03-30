@@ -1,3 +1,3 @@
 class ApiConstants {
-  static const String baseUrl = 'http://172.20.10.10:3000';
+  static const String baseUrl = 'https://moto-ride-quality-production.up.railway.app';
 }
