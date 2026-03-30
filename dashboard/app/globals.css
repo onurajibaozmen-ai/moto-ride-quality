@@ -1,1 +1,11 @@
 @import "tailwindcss";
+
+/* Optional: global styles */
+html, body {
+  padding: 0;
+  margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
