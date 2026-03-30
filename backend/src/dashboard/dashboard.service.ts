@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { RideStatus } from '@prisma/client';
+import { Prisma, RideStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -7,109 +7,125 @@ export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getOverview() {
-    const [
-      totalCouriers,
-      activeRides,
-      completedRides,
-      totalEvents,
-      scoredRides,
-      recentRides,
-    ] = await Promise.all([
-      this.prisma.user.count({
-        where: { role: 'COURIER' },
-      }),
-      this.prisma.ride.count({
-        where: { status: RideStatus.ACTIVE },
-      }),
-      this.prisma.ride.count({
-        where: { status: RideStatus.COMPLETED },
-      }),
-      this.prisma.rideEvent.count(),
-      this.prisma.ride.findMany({
-        where: {
-          score: { not: null },
-        },
-        select: {
-          score: true,
-        },
-      }),
-      this.prisma.ride.findMany({
-        take: 5,
-        orderBy: {
-          createdAt: 'desc',
-        },
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              phone: true,
-              lastSeenAt: true,
-            },
-          },
-        },
-      }),
-    ]);
+    const [totalCouriers, activeRides, completedRides, rideScores, events] =
+      await Promise.all([
+        this.prisma.user.count({
+          where: { role: 'COURIER' },
+        }),
+        this.prisma.ride.count({
+          where: { status: RideStatus.ACTIVE },
+        }),
+        this.prisma.ride.count({
+          where: { status: RideStatus.COMPLETED },
+        }),
+        this.prisma.rideScore.findMany({
+          select: { totalScore: true, confidenceLevel: true },
+        }),
+        this.prisma.rideEvent.count(),
+      ]);
 
-    const averageScore =
-      scoredRides.length > 0
+    const avgScore =
+      rideScores.length > 0
         ? Number(
             (
-              scoredRides.reduce((sum, ride) => sum + (ride.score ?? 0), 0) /
-              scoredRides.length
+              rideScores.reduce((sum, item) => sum + item.totalScore, 0) /
+              rideScores.length
             ).toFixed(2),
           )
-        : null;
+        : 0;
+
+    const lowConfidenceRideCount = rideScores.filter(
+      (item) => item.confidenceLevel === 'LOW',
+    ).length;
 
     return {
       totalCouriers,
       activeRides,
       completedRides,
-      totalEvents,
-      averageScore,
-      recentRides,
+      totalEvents: events,
+      averageScore: avgScore,
+      lowConfidenceRideCount,
     };
   }
 
-  async getRides(params: {
+  async getRides(filters?: {
     status?: 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
     userId?: string;
   }) {
-    return this.prisma.ride.findMany({
-      where: {
-        status: params.status,
-        userId: params.userId,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
+    const where: Prisma.RideWhereInput = {
+      ...(filters?.status ? { status: filters.status } : {}),
+      ...(filters?.userId ? { userId: filters.userId } : {}),
+    };
+
+    const rides = await this.prisma.ride.findMany({
+      where,
       include: {
         user: {
           select: {
             id: true,
             name: true,
             phone: true,
-            role: true,
-            lastSeenAt: true,
+          },
+        },
+        analytics: true,
+        scoreCard: true,
+        _count: {
+          select: {
+            rideEvents: true,
+            telemetryPoints: true,
           },
         },
       },
-      take: 50,
+      orderBy: {
+        startedAt: 'desc',
+      },
+      take: 100,
     });
+
+    return rides.map((ride) => ({
+      id: ride.id,
+      status: ride.status,
+      startedAt: ride.startedAt,
+      endedAt: ride.endedAt,
+      totalDistanceM: ride.analytics?.totalDistanceM ?? ride.totalDistanceM ?? 0,
+      durationS:
+        ride.durationS ??
+        ((ride.endedAt?.getTime() ?? Date.now()) - ride.startedAt.getTime()) /
+          1000,
+      score: ride.scoreCard?.totalScore ?? ride.score ?? null,
+      scoreVersion: ride.scoreCard?.scoringVersion ?? ride.scoreVersion ?? null,
+      confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
+      qualityScore: ride.analytics?.qualityScore ?? null,
+      qualityFlags: ride.analytics?.qualityFlags ?? [],
+      eventsCount: ride._count.rideEvents,
+      telemetryCount: ride._count.telemetryPoints,
+      courier: ride.user,
+    }));
   }
 
   async getRideEvents(rideId: string) {
     const ride = await this.prisma.ride.findUnique({
       where: { id: rideId },
+      select: { id: true },
+    });
+
+    if (!ride) {
+      throw new NotFoundException('Ride not found');
+    }
+
+    return this.prisma.rideEvent.findMany({
+      where: { rideId },
+      orderBy: { ts: 'asc' },
+    });
+  }
+
+  async getRideScoreBreakdown(rideId: string) {
+    const ride = await this.prisma.ride.findUnique({
+      where: { id: rideId },
       include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            lastSeenAt: true,
-          },
-        },
+        analytics: true,
+        scoreCard: true,
+        rideEvents: true,
       },
     });
 
@@ -117,16 +133,45 @@ export class DashboardService {
       throw new NotFoundException('Ride not found');
     }
 
-    const events = await this.prisma.rideEvent.findMany({
-      where: { rideId },
-      orderBy: {
-        ts: 'asc',
-      },
-    });
+    const breakdownJson =
+      ride.scoreCard?.breakdownJson &&
+      typeof ride.scoreCard.breakdownJson === 'object'
+        ? ride.scoreCard.breakdownJson
+        : {};
 
     return {
-      ride,
-      events,
+      rideId: ride.id,
+      totalScore: ride.scoreCard?.totalScore ?? ride.score ?? null,
+      scoringVersion: ride.scoreCard?.scoringVersion ?? ride.scoreVersion ?? null,
+      confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
+      qualityScore: ride.analytics?.qualityScore ?? null,
+      qualityFlags: ride.analytics?.qualityFlags ?? [],
+      analytics: ride.analytics
+        ? {
+            sampleCount: ride.analytics.sampleCount,
+            validPointCount: ride.analytics.validPointCount,
+            gpsGapCount: ride.analytics.gpsGapCount,
+            lowAccuracyCount: ride.analytics.lowAccuracyCount,
+            movingSeconds: ride.analytics.movingSeconds,
+            idleSeconds: ride.analytics.idleSeconds,
+            totalDistanceM: ride.analytics.totalDistanceM,
+            avgSpeedKmh: ride.analytics.avgSpeedKmh,
+            p95SpeedKmh: ride.analytics.p95SpeedKmh,
+            maxSpeedKmh: ride.analytics.maxSpeedKmh,
+            medianAccuracyM: ride.analytics.medianAccuracyM,
+          }
+        : null,
+      eventCounts: {
+        harshBrake: ride.rideEvents.filter((event) => event.type === 'harsh_brake')
+          .length,
+        harshAccel: ride.rideEvents.filter((event) => event.type === 'harsh_accel')
+          .length,
+        speeding: ride.rideEvents.filter((event) => event.type === 'speeding').length,
+      },
+      components:
+        typeof breakdownJson === 'object' && breakdownJson !== null
+          ? (breakdownJson as Record<string, unknown>)
+          : {},
     };
   }
 
@@ -135,151 +180,116 @@ export class DashboardService {
       where: {
         role: 'COURIER',
       },
-      orderBy: {
-        createdAt: 'desc',
-      },
-      select: {
-        id: true,
-        name: true,
-        phone: true,
-        isActive: true,
-        lastSeenAt: true,
-        createdAt: true,
+      include: {
         rides: {
-          orderBy: {
-            createdAt: 'desc',
+          where: {
+            status: RideStatus.COMPLETED,
           },
-          take: 1,
-          select: {
-            id: true,
-            status: true,
-            score: true,
-            startedAt: true,
-            endedAt: true,
-            createdAt: true,
+          include: {
+            analytics: true,
+            scoreCard: true,
+            _count: {
+              select: {
+                rideEvents: true,
+              },
+            },
+          },
+          orderBy: {
+            startedAt: 'desc',
           },
         },
       },
+      orderBy: {
+        createdAt: 'desc',
+      },
     });
 
-    const now = Date.now();
-
     return couriers.map((courier) => {
-      const lastSeenAt = courier.lastSeenAt;
-      const isOnline =
-        lastSeenAt != null &&
-        now - new Date(lastSeenAt).getTime() <= 60 * 1000;
+      const completedRides = courier.rides;
+      const totalRides = completedRides.length;
+
+      const avgScore =
+        totalRides > 0
+          ? Number(
+              (
+                completedRides.reduce(
+                  (sum, ride) => sum + (ride.scoreCard?.totalScore ?? ride.score ?? 0),
+                  0,
+                ) / totalRides
+              ).toFixed(2),
+            )
+          : 0;
+
+      const totalDistanceM = completedRides.reduce(
+        (sum, ride) => sum + (ride.analytics?.totalDistanceM ?? ride.totalDistanceM ?? 0),
+        0,
+      );
+
+      const totalEvents = completedRides.reduce(
+        (sum, ride) => sum + ride._count.rideEvents,
+        0,
+      );
+
+      const lowConfidenceRides = completedRides.filter(
+        (ride) => ride.scoreCard?.confidenceLevel === 'LOW',
+      ).length;
 
       return {
         id: courier.id,
         name: courier.name,
         phone: courier.phone,
         isActive: courier.isActive,
-        isOnline,
-        lastSeenAt,
-        createdAt: courier.createdAt,
-        lastRide: courier.rides[0] ?? null,
+        lastSeenAt: courier.lastSeenAt,
+        totalCompletedRides: totalRides,
+        averageScore: avgScore,
+        totalDistanceM: Number(totalDistanceM.toFixed(2)),
+        totalEvents,
+        lowConfidenceRides,
       };
     });
   }
 
   async getPilotSummary() {
-    const [
-      totalCouriers,
-      activeRides,
-      completedRides,
-      totalEvents,
-      harshBrakeCount,
-      harshAccelCount,
-      speedingCount,
-      scoredRides,
-      recentRiskyRides,
-      couriers,
-    ] = await Promise.all([
-      this.prisma.user.count({
-        where: { role: 'COURIER' },
-      }),
-      this.prisma.ride.count({
-        where: { status: RideStatus.ACTIVE },
-      }),
-      this.prisma.ride.count({
+    const [overview, couriers, recentCompletedRides] = await Promise.all([
+      this.getOverview(),
+      this.getCouriers(),
+      this.prisma.ride.findMany({
         where: { status: RideStatus.COMPLETED },
-      }),
-      this.prisma.rideEvent.count(),
-      this.prisma.rideEvent.count({
-        where: { type: 'harsh_brake' },
-      }),
-      this.prisma.rideEvent.count({
-        where: { type: 'harsh_accel' },
-      }),
-      this.prisma.rideEvent.count({
-        where: { type: 'speeding' },
-      }),
-      this.prisma.ride.findMany({
-        where: {
-          score: { not: null },
-        },
-        select: {
-          score: true,
-        },
-      }),
-      this.prisma.ride.findMany({
-        where: {
-          score: { not: null },
-        },
-        orderBy: {
-          score: 'asc',
-        },
-        take: 5,
         include: {
+          analytics: true,
+          scoreCard: true,
           user: {
             select: {
-              id: true,
               name: true,
               phone: true,
             },
           },
+          _count: {
+            select: {
+              rideEvents: true,
+            },
+          },
         },
-      }),
-      this.prisma.user.findMany({
-        where: { role: 'COURIER' },
-        select: {
-          id: true,
-          lastSeenAt: true,
-        },
+        orderBy: { endedAt: 'desc' },
+        take: 10,
       }),
     ]);
 
-    const averageScore =
-      scoredRides.length > 0
-        ? Number(
-            (
-              scoredRides.reduce((sum, ride) => sum + (ride.score ?? 0), 0) /
-              scoredRides.length
-            ).toFixed(2),
-          )
-        : null;
-
-    const now = Date.now();
-
-    const onlineCourierCount = couriers.filter((courier) => {
-      if (!courier.lastSeenAt) return false;
-      return now - new Date(courier.lastSeenAt).getTime() <= 60 * 1000;
-    }).length;
-
     return {
-      totalCouriers,
-      onlineCourierCount,
-      activeRides,
-      completedRides,
-      totalEvents,
-      averageScore,
-      eventBreakdown: {
-        harshBrake: harshBrakeCount,
-        harshAccel: harshAccelCount,
-        speeding: speedingCount,
-      },
-      riskyRides: recentRiskyRides,
+      overview,
+      couriers,
+      recentCompletedRides: recentCompletedRides.map((ride) => ({
+        id: ride.id,
+        courierName: ride.user.name,
+        courierPhone: ride.user.phone,
+        startedAt: ride.startedAt,
+        endedAt: ride.endedAt,
+        totalDistanceM: ride.analytics?.totalDistanceM ?? ride.totalDistanceM ?? 0,
+        score: ride.scoreCard?.totalScore ?? ride.score ?? null,
+        confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
+        qualityScore: ride.analytics?.qualityScore ?? null,
+        eventsCount: ride._count.rideEvents,
+      })),
     };
   }
 }

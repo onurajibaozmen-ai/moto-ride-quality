@@ -1,4 +1,3 @@
-
 import {
   BadRequestException,
   Injectable,
@@ -7,6 +6,8 @@ import {
 import { Prisma, RideStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelemetryBatchDto } from './dto/telemetry-batch.dto';
+import { RideAnalyticsService } from '../analytics/ride-analytics.service';
+import { RideScoringService } from '../scoring/ride-scoring.service';
 
 type DetectedEvent = {
   type: 'harsh_brake' | 'harsh_accel' | 'speeding';
@@ -33,7 +34,11 @@ type PointWithDerived = {
 
 @Injectable()
 export class TelemetryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rideAnalyticsService: RideAnalyticsService,
+    private readonly rideScoringService: RideScoringService,
+  ) {}
 
   async ingestBatch(userId: string, body: TelemetryBatchDto) {
     const ride = await this.prisma.ride.findFirst({
@@ -51,30 +56,32 @@ export class TelemetryService {
       throw new BadRequestException('Ride is not active');
     }
 
-    const result = await this.prisma.telemetryPoint.createMany({
-      data: body.points.map((point) => ({
-      rideId: body.rideId,
-      userId,
-      ts: new Date(point.ts),
-      lat: point.lat,
-      lng: point.lng,
-      speedKmh: point.speedKmh ?? null,
-      accuracyM: point.accuracyM ?? null,
-      heading: point.heading ?? null,
-      accelX: point.accelX ?? null,
-      accelY: point.accelY ?? null,
-      accelZ: point.accelZ ?? null,
-      batteryLevel: point.batteryLevel ?? null,
-      networkType: point.networkType ?? null,
-    })),
-  });
+    const sanitizedPoints = body.points
+      .map((point) => ({
+        rideId: body.rideId,
+        userId,
+        ts: new Date(point.ts),
+        lat: point.lat,
+        lng: point.lng,
+        speedKmh: point.speedKmh ?? null,
+        accuracyM: point.accuracyM ?? null,
+        heading: point.heading ?? null,
+        accelX: point.accelX ?? null,
+        accelY: point.accelY ?? null,
+        accelZ: point.accelZ ?? null,
+        batteryLevel: point.batteryLevel ?? null,
+        networkType: point.networkType ?? null,
+      }))
+      .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
+      .sort((a, b) => a.ts.getTime() - b.ts.getTime());
 
-// 🔥 BURASI AYRI OLMALI
+    const result = await this.prisma.telemetryPoint.createMany({
+      data: sanitizedPoints,
+    });
+
     await this.prisma.user.update({
       where: { id: userId },
-      data: {
-        lastSeenAt: new Date(),
-      },
+      data: { lastSeenAt: new Date() },
     });
 
     const detectedEvents = this.detectEvents(body);
@@ -94,14 +101,26 @@ export class TelemetryService {
       });
     }
 
-    const score = await this.recalculateRideScore(body.rideId);
+    const analytics =
+      await this.rideAnalyticsService.recomputeRideAnalytics(body.rideId);
+    const scoreCard =
+      await this.rideScoringService.recomputeRideScore(body.rideId);
 
     return {
       ok: true,
       insertedCount: result.count,
       detectedEventsCount: detectedEvents.length,
-      score,
       rideId: body.rideId,
+      analytics: analytics
+        ? {
+            qualityScore: analytics.qualityScore,
+            totalDistanceM: analytics.totalDistanceM,
+            movingSeconds: analytics.movingSeconds,
+            qualityFlags: analytics.qualityFlags,
+          }
+        : null,
+      score: scoreCard?.totalScore ?? null,
+      confidenceLevel: scoreCard?.confidenceLevel ?? null,
     };
   }
 
@@ -124,6 +143,10 @@ export class TelemetryService {
       }))
       .sort((a, b) => a.ts.getTime() - b.ts.getTime());
 
+    let lastBrakeTs = 0;
+    let lastAccelTs = 0;
+    let lastSpeedingTs = 0;
+
     for (let i = 0; i < points.length; i++) {
       const point = points[i];
       const prev = i > 0 ? points[i - 1] : null;
@@ -145,19 +168,22 @@ export class TelemetryService {
         point.accelY !== null
       ) {
         dtSec = (point.ts.getTime() - prev.ts.getTime()) / 1000;
-
-        if (dtSec > 0.2 && dtSec < 10) {
+        if (dtSec > 0.2 && dtSec < 5) {
           jerkY = (point.accelY - prev.accelY) / dtSec;
         }
       }
 
+      const nowMs = point.ts.getTime();
       const canEvaluateDynamicEvents = speed >= 15;
 
       if (canEvaluateDynamicEvents) {
-        const harshBrakeByAccel = accelY <= -2.5;
-        const harshBrakeByJerk = jerkY !== null && jerkY <= -4.0;
+        const harshBrakeByAccel = accelY <= -2.7;
+        const harshBrakeByJerk = jerkY !== null && jerkY <= -4.5;
 
-        if (harshBrakeByAccel || harshBrakeByJerk) {
+        if (
+          (harshBrakeByAccel || harshBrakeByJerk) &&
+          nowMs - lastBrakeTs > 3000
+        ) {
           const severity = this.computeBrakeSeverity({
             speed,
             accelY,
@@ -178,12 +204,17 @@ export class TelemetryService {
               rule: harshBrakeByAccel ? 'accel' : 'jerk',
             } as Prisma.InputJsonValue,
           });
+
+          lastBrakeTs = nowMs;
         }
 
-        const harshAccelByAccel = accelY >= 2.5;
-        const harshAccelByJerk = jerkY !== null && jerkY >= 4.0;
+        const harshAccelByAccel = accelY >= 2.8;
+        const harshAccelByJerk = jerkY !== null && jerkY >= 4.8;
 
-        if (harshAccelByAccel || harshAccelByJerk) {
+        if (
+          (harshAccelByAccel || harshAccelByJerk) &&
+          nowMs - lastAccelTs > 3000
+        ) {
           const severity = this.computeAccelSeverity({
             speed,
             accelY,
@@ -204,10 +235,12 @@ export class TelemetryService {
               rule: harshAccelByAccel ? 'accel' : 'jerk',
             } as Prisma.InputJsonValue,
           });
+
+          lastAccelTs = nowMs;
         }
       }
 
-      if (speed >= 70) {
+      if (speed >= 72 && nowMs - lastSpeedingTs > 4000) {
         const speedingSeverity = Number((speed - 70).toFixed(2));
 
         events.push({
@@ -221,6 +254,8 @@ export class TelemetryService {
             threshold: 70,
           } as Prisma.InputJsonValue,
         });
+
+        lastSpeedingTs = nowMs;
       }
     }
 
@@ -240,13 +275,13 @@ export class TelemetryService {
     accelY: number;
     jerkY: number | null;
   }) {
-    const accelComponent = Math.max(0, Math.abs(params.accelY) - 2.5);
+    const accelComponent = Math.max(0, Math.abs(params.accelY) - 2.7);
     const jerkComponent =
-      params.jerkY !== null ? Math.max(0, Math.abs(params.jerkY) - 4.0) : 0;
+      params.jerkY !== null ? Math.max(0, Math.abs(params.jerkY) - 4.5) : 0;
     const speedComponent = Math.max(0, params.speed - 15) / 20;
 
     return Number(
-      (1 + accelComponent + jerkComponent * 0.5 + speedComponent).toFixed(2),
+      (1 + accelComponent + jerkComponent * 0.45 + speedComponent).toFixed(2),
     );
   }
 
@@ -255,13 +290,13 @@ export class TelemetryService {
     accelY: number;
     jerkY: number | null;
   }) {
-    const accelComponent = Math.max(0, params.accelY - 2.5);
+    const accelComponent = Math.max(0, params.accelY - 2.8);
     const jerkComponent =
-      params.jerkY !== null ? Math.max(0, params.jerkY - 4.0) : 0;
+      params.jerkY !== null ? Math.max(0, params.jerkY - 4.8) : 0;
     const speedComponent = Math.max(0, params.speed - 15) / 25;
 
     return Number(
-      (1 + accelComponent + jerkComponent * 0.5 + speedComponent).toFixed(2),
+      (1 + accelComponent + jerkComponent * 0.45 + speedComponent).toFixed(2),
     );
   }
 
@@ -286,37 +321,5 @@ export class TelemetryService {
     }
 
     return deduped;
-  }
-
-  private async recalculateRideScore(rideId: string) {
-    const events = await this.prisma.rideEvent.findMany({
-      where: { rideId },
-    });
-
-    let score = 100;
-
-    for (const event of events) {
-      const severity = event.severity ?? 1;
-
-      if (event.type === 'harsh_brake') {
-        score -= 4 + Math.min(severity, 6) * 1.2;
-      } else if (event.type === 'harsh_accel') {
-        score -= 3 + Math.min(severity, 6) * 1.0;
-      } else if (event.type === 'speeding') {
-        score -= 2 + Math.min(severity / 5, 6) * 0.8;
-      }
-    }
-
-    score = Number(Math.max(0, score).toFixed(2));
-
-    const updatedRide = await this.prisma.ride.update({
-      where: { id: rideId },
-      data: {
-        score,
-        scoreVersion: 'v2',
-      },
-    });
-
-    return updatedRide.score;
   }
 }

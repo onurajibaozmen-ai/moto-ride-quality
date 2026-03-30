@@ -23,6 +23,11 @@ export class DashboardController {
     return this.dashboardService.getRideEvents(rideId);
   }
 
+  @Get('rides/:id/score-breakdown')
+  getRideScoreBreakdown(@Param('id') rideId: string) {
+    return this.dashboardService.getRideScoreBreakdown(rideId);
+  }
+
   @Get('couriers')
   getCouriers() {
     return this.dashboardService.getCouriers();
