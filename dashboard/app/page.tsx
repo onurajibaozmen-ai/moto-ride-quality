@@ -1,92 +1,87 @@
-import Nav from './components/nav';
-import { RideStatusBadge, ScoreBadge } from './components/ui';
+import Link from "next/link";
+import { fetchJson } from "@/lib/api";
+
+type Overview = {
+  totalCouriers: number;
+  activeRides: number;
+  completedRides: number;
+  totalEvents: number;
+  averageScore: number;
+  lowConfidenceRideCount: number;
+};
 
 async function getOverview() {
-  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
-
-  const res = await fetch(`${baseUrl}/dashboard/overview`, {
-    cache: 'no-store',
-  });
-
-  if (!res.ok) {
-    throw new Error('Failed to fetch overview');
-  }
-
-  return res.json();
-}
-
-function StatCard({
-  title,
-  value,
-}: {
-  title: string;
-  value: string | number;
-}) {
-  return (
-    <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
-      <div className="text-sm text-slate-500">{title}</div>
-      <div className="mt-2 text-3xl font-semibold text-slate-900">{value}</div>
-    </div>
-  );
+  return fetchJson<Overview>("/dashboard/overview");
 }
 
 export default async function HomePage() {
   const data = await getOverview();
 
+  const cards = [
+    { label: "Total Couriers", value: data.totalCouriers ?? 0 },
+    { label: "Active Rides", value: data.activeRides ?? 0 },
+    { label: "Completed Rides", value: data.completedRides ?? 0 },
+    { label: "Total Events", value: data.totalEvents ?? 0 },
+    { label: "Average Score", value: data.averageScore ?? 0 },
+    { label: "Low Confidence Rides", value: data.lowConfidenceRideCount ?? 0 },
+  ];
+
   return (
-    <main className="min-h-screen bg-slate-50 p-8">
-      <div className="mx-auto max-w-6xl">
-        <Nav />
-
-        <h1 className="mb-8 text-3xl font-bold text-slate-900">
-          Moto Ride Quality Dashboard
-        </h1>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <StatCard title="Total Couriers" value={data.totalCouriers} />
-          <StatCard title="Active Rides" value={data.activeRides} />
-          <StatCard title="Completed Rides" value={data.completedRides} />
-          <StatCard title="Total Events" value={data.totalEvents} />
-          <StatCard title="Average Score" value={data.averageScore ?? '-'} />
+    <main className="p-6">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div>
+          <h1 className="text-3xl font-semibold text-slate-900">
+            Ride Quality Dashboard
+          </h1>
+          <p className="mt-2 text-sm text-slate-600">
+            Production overview of courier ride quality metrics.
+          </p>
         </div>
 
-        <section className="mt-10">
-          <h2 className="mb-4 text-xl font-semibold text-slate-900">
-            Recent Rides
-          </h2>
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {cards.map((card) => (
+            <div
+              key={card.label}
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+            >
+              <div className="text-sm text-slate-500">{card.label}</div>
+              <div className="mt-3 text-4xl font-semibold text-slate-900">
+                {card.value}
+              </div>
+            </div>
+          ))}
+        </section>
 
-          <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-100">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-slate-100 text-slate-600">
-                <tr>
-                  <th className="px-4 py-3">Ride ID</th>
-                  <th className="px-4 py-3">Courier</th>
-                  <th className="px-4 py-3">Phone</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Score</th>
-                  <th className="px-4 py-3">Started At</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.recentRides.map((ride: any) => (
-                  <tr key={ride.id} className="border-t border-slate-100">
-                    <td className="px-4 py-3 font-mono text-xs">{ride.id}</td>
-                    <td className="px-4 py-3">{ride.user?.name ?? '-'}</td>
-                    <td className="px-4 py-3">{ride.user?.phone ?? '-'}</td>
-                    <td className="px-4 py-3">
-                      <RideStatusBadge status={ride.status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <ScoreBadge score={ride.score} />
-                    </td>
-                    <td className="px-4 py-3">
-                      {new Date(ride.startedAt).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <section className="grid gap-4 md:grid-cols-3">
+          <Link
+            href="/rides"
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:bg-slate-50"
+          >
+            <div className="text-lg font-semibold">Rides</div>
+            <p className="mt-2 text-sm text-slate-600">
+              Browse completed and active rides.
+            </p>
+          </Link>
+
+          <Link
+            href="/couriers"
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:bg-slate-50"
+          >
+            <div className="text-lg font-semibold">Couriers</div>
+            <p className="mt-2 text-sm text-slate-600">
+              See courier performance summaries.
+            </p>
+          </Link>
+
+          <Link
+            href="/summary"
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:bg-slate-50"
+          >
+            <div className="text-lg font-semibold">Summary</div>
+            <p className="mt-2 text-sm text-slate-600">
+              View pilot-level aggregate summary.
+            </p>
+          </Link>
         </section>
       </div>
     </main>
