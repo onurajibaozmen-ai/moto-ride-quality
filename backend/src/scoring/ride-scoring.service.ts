@@ -2,10 +2,24 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, ScoreConfidenceLevel } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
+type ScoreBreakdown = {
+  eventCounts: Record<string, number>;
+  eventPenalties: Record<string, number>;
+  analytics: {
+    qualityScore: number | null;
+    totalDistanceM: number;
+    movingSeconds: number;
+    qualityFlags: string[];
+  };
+  factors: {
+    shortRidePenalty: number;
+    lowQualityPenalty: number;
+    confidenceReason: string;
+  };
+};
+
 @Injectable()
 export class RideScoringService {
-  private readonly scoringVersion = 'v4_event_explainability';
-
   constructor(private readonly prisma: PrismaService) {}
 
   async recomputeRideScore(rideId: string) {
@@ -13,156 +27,117 @@ export class RideScoringService {
       where: { id: rideId },
       include: {
         analytics: true,
-        rideEvents: {
-          orderBy: { ts: 'asc' },
-        },
+        rideEvents: true,
       },
     });
 
-    if (!ride) {
+    if (!ride || !ride.analytics) {
       return null;
     }
 
-    const analytics = ride.analytics;
-
-    const harshBrakeEvents = ride.rideEvents.filter(
-      (event) => event.type === 'harsh_brake',
-    );
-    const harshAccelEvents = ride.rideEvents.filter(
-      (event) => event.type === 'harsh_accel',
-    );
-    const speedingEvents = ride.rideEvents.filter(
-      (event) => event.type === 'speeding',
-    );
-
-    const distanceKm = Math.max((analytics?.totalDistanceM ?? 0) / 1000, 0.1);
-    const movingSeconds = Math.max(analytics?.movingSeconds ?? 0, 1);
-    const idleSeconds = Math.max(analytics?.idleSeconds ?? 0, 0);
-    const totalRideSeconds = Math.max(movingSeconds + idleSeconds, 1);
-
-    const brakeRate = harshBrakeEvents.length / distanceKm;
-    const accelRate = harshAccelEvents.length / distanceKm;
-    const speedingRate = speedingEvents.length / distanceKm;
-    const idleRatio = idleSeconds / totalRideSeconds;
-    const p95Speed = analytics?.p95SpeedKmh ?? 0;
-    const qualityScore = analytics?.qualityScore ?? 0;
+    const qualityFlags = this.toStringArray(ride.analytics.qualityFlags);
+    const eventCounts = this.countEvents(ride.rideEvents.map((event) => event.type));
 
     const safetyPenalty =
-      harshBrakeEvents.length * 4 +
-      harshAccelEvents.length * 2 +
-      this.cappedPenalty(brakeRate, 0.2, 2.5, 10);
+      eventCounts.harsh_brake * 4 +
+      eventCounts.harsh_accel * 2.5 +
+      eventCounts.sharp_turn * 2;
 
     const compliancePenalty =
-      speedingEvents.length * 3 +
-      this.cappedPenalty(speedingRate, 0.1, 2.0, 12) +
-      this.cappedPenalty(Math.max(0, p95Speed - 55), 0, 30, 6);
+      eventCounts.speeding * 3;
 
     const smoothnessPenalty =
-      this.severityWeightedPenalty(harshBrakeEvents, 8) +
-      this.severityWeightedPenalty(harshAccelEvents, 5);
+      eventCounts.harsh_brake * 2 +
+      eventCounts.harsh_accel * 2 +
+      eventCounts.sharp_turn * 3;
 
-    const efficiencyPenalty = this.cappedPenalty(idleRatio, 0.12, 0.5, 10);
+    const shortRidePenalty = qualityFlags.includes('SHORT_RIDE') ? 8 : 0;
 
-    const safetyScore = this.normalizeScore(40 - safetyPenalty, 40);
-    const complianceScore = this.normalizeScore(25 - compliancePenalty, 25);
-    const smoothnessScore = this.normalizeScore(20 - smoothnessPenalty, 20);
-    const efficiencyScore = this.normalizeScore(15 - efficiencyPenalty, 15);
+    const lowQualityPenalty =
+      ride.analytics.qualityScore !== null
+        ? (1 - ride.analytics.qualityScore) * 20
+        : 12;
+
+    let safetyScore = 100 - safetyPenalty - shortRidePenalty * 0.5;
+    let complianceScore = 100 - compliancePenalty;
+    let smoothnessScore = 100 - smoothnessPenalty - shortRidePenalty * 0.5;
+    let efficiencyScore =
+      100 -
+      (ride.analytics.idleSeconds > ride.analytics.movingSeconds ? 8 : 0) -
+      (ride.analytics.totalDistanceM < 1500 ? 6 : 0);
+
+    safetyScore = this.clamp(safetyScore, 0, 100);
+    complianceScore = this.clamp(complianceScore, 0, 100);
+    smoothnessScore = this.clamp(smoothnessScore, 0, 100);
+    efficiencyScore = this.clamp(efficiencyScore, 0, 100);
 
     let totalScore =
       safetyScore * 0.4 +
       complianceScore * 0.25 +
-      smoothnessScore * 0.2 +
-      efficiencyScore * 0.15;
+      smoothnessScore * 0.25 +
+      efficiencyScore * 0.1 -
+      lowQualityPenalty;
 
-    totalScore = totalScore * this.qualityMultiplier(qualityScore);
-    totalScore = this.clamp(totalScore, 0, 100);
+    totalScore = this.clamp(Number(totalScore.toFixed(2)), 0, 100);
 
-    const confidenceLevel = this.resolveConfidenceLevel(
-      qualityScore,
-      analytics?.qualityFlags,
-    );
-
-    const eventTimeline = ride.rideEvents.map((event) => {
-      const meta =
-        event.metaJson && typeof event.metaJson === 'object'
-          ? (event.metaJson as Record<string, unknown>)
-          : {};
-
-      return {
-        type: event.type,
-        timestamp: event.ts,
-        severity: event.severity ?? 0,
-        penalty:
-          typeof meta.penalty === 'number'
-            ? meta.penalty
-            : event.type === 'harsh_brake'
-              ? 4
-              : event.type === 'harsh_accel'
-                ? 2
-                : event.type === 'speeding'
-                  ? 3
-                  : 0,
-      };
+    const confidenceLevel = this.resolveConfidenceLevel({
+      qualityScore: ride.analytics.qualityScore,
+      qualityFlags,
+      sampleCount: ride.analytics.sampleCount,
+      movingSeconds: ride.analytics.movingSeconds,
     });
 
-    const breakdown = {
-      inputs: {
-        distanceKm: Number(distanceKm.toFixed(2)),
-        movingSeconds,
-        idleSeconds,
-        idleRatio: Number(idleRatio.toFixed(4)),
-        qualityScore,
-        p95SpeedKmh: p95Speed,
+    const confidenceReason = this.resolveConfidenceReason(
+      {
+        qualityScore: ride.analytics.qualityScore,
+        qualityFlags,
+        sampleCount: ride.analytics.sampleCount,
+        movingSeconds: ride.analytics.movingSeconds,
       },
-      eventCounts: {
-        harshBrake: harshBrakeEvents.length,
-        harshAccel: harshAccelEvents.length,
-        speeding: speedingEvents.length,
-      },
-      rates: {
-        brakeRatePerKm: Number(brakeRate.toFixed(4)),
-        accelRatePerKm: Number(accelRate.toFixed(4)),
-        speedingRatePerKm: Number(speedingRate.toFixed(4)),
-      },
-      penalties: {
+      confidenceLevel,
+    );
+
+    const breakdown: ScoreBreakdown = {
+      eventCounts,
+      eventPenalties: {
         safetyPenalty: Number(safetyPenalty.toFixed(2)),
         compliancePenalty: Number(compliancePenalty.toFixed(2)),
         smoothnessPenalty: Number(smoothnessPenalty.toFixed(2)),
-        efficiencyPenalty: Number(efficiencyPenalty.toFixed(2)),
       },
-      scores: {
-        safetyScore,
-        complianceScore,
-        smoothnessScore,
-        efficiencyScore,
-        totalScore: Number(totalScore.toFixed(2)),
+      analytics: {
+        qualityScore: ride.analytics.qualityScore,
+        totalDistanceM: ride.analytics.totalDistanceM,
+        movingSeconds: ride.analytics.movingSeconds,
+        qualityFlags,
       },
-      qualityFlags: analytics?.qualityFlags ?? [],
-      scoringVersion: this.scoringVersion,
-      events: eventTimeline,
+      factors: {
+        shortRidePenalty,
+        lowQualityPenalty: Number(lowQualityPenalty.toFixed(2)),
+        confidenceReason,
+      },
     };
 
     const scoreCard = await this.prisma.rideScore.upsert({
       where: { rideId },
       create: {
         rideId,
-        totalScore: Number(totalScore.toFixed(2)),
-        safetyScore,
-        complianceScore,
-        smoothnessScore,
-        efficiencyScore,
+        totalScore,
+        safetyScore: Number(safetyScore.toFixed(2)),
+        complianceScore: Number(complianceScore.toFixed(2)),
+        smoothnessScore: Number(smoothnessScore.toFixed(2)),
+        efficiencyScore: Number(efficiencyScore.toFixed(2)),
         confidenceLevel,
-        scoringVersion: this.scoringVersion,
+        scoringVersion: 'score-v2-phase-0',
         breakdownJson: breakdown as Prisma.InputJsonValue,
       },
       update: {
-        totalScore: Number(totalScore.toFixed(2)),
-        safetyScore,
-        complianceScore,
-        smoothnessScore,
-        efficiencyScore,
+        totalScore,
+        safetyScore: Number(safetyScore.toFixed(2)),
+        complianceScore: Number(complianceScore.toFixed(2)),
+        smoothnessScore: Number(smoothnessScore.toFixed(2)),
+        efficiencyScore: Number(efficiencyScore.toFixed(2)),
         confidenceLevel,
-        scoringVersion: this.scoringVersion,
+        scoringVersion: 'score-v2-phase-0',
         breakdownJson: breakdown as Prisma.InputJsonValue,
       },
     });
@@ -170,84 +145,98 @@ export class RideScoringService {
     await this.prisma.ride.update({
       where: { id: rideId },
       data: {
-        score: scoreCard.totalScore,
-        scoreVersion: this.scoringVersion,
+        score: totalScore,
+        scoreVersion: 'score-v2-phase-0',
       },
     });
 
     return scoreCard;
   }
 
-  private cappedPenalty(
-    value: number,
-    lowerGoodBound: number,
-    upperBadBound: number,
-    maxPenalty: number,
-  ) {
-    if (value <= lowerGoodBound) {
-      return 0;
+  private countEvents(types: string[]) {
+    const counts: Record<string, number> = {
+      harsh_brake: 0,
+      harsh_accel: 0,
+      speeding: 0,
+      sharp_turn: 0,
+    };
+
+    for (const type of types) {
+      if (!(type in counts)) {
+        counts[type] = 0;
+      }
+      counts[type] += 1;
     }
 
-    if (value >= upperBadBound) {
-      return maxPenalty;
-    }
-
-    const ratio =
-      (value - lowerGoodBound) / (upperBadBound - lowerGoodBound);
-
-    return Number((ratio * maxPenalty).toFixed(2));
+    return counts;
   }
 
-  private severityWeightedPenalty(
-    events: { severity: number | null }[],
-    maxPenalty: number,
-  ) {
-    if (events.length === 0) {
-      return 0;
-    }
+  private resolveConfidenceLevel(analytics: {
+    qualityScore: number | null;
+    qualityFlags: string[];
+    sampleCount: number;
+    movingSeconds: number;
+  }): ScoreConfidenceLevel {
+    const flags = analytics.qualityFlags;
 
-    const weighted = events.reduce((sum, event) => {
-      const severity = event.severity ?? 1;
-      return sum + Math.min(severity, 8);
-    }, 0);
-
-    return this.clamp(weighted * 0.6, 0, maxPenalty);
-  }
-
-  private qualityMultiplier(qualityScore: number) {
-    if (qualityScore >= 0.85) {
-      return 1;
-    }
-    if (qualityScore >= 0.7) {
-      return 0.98;
-    }
-    if (qualityScore >= 0.55) {
-      return 0.95;
-    }
-    return 0.9;
-  }
-
-  private resolveConfidenceLevel(
-    qualityScore: number,
-    qualityFlags: unknown,
-  ): ScoreConfidenceLevel {
-    const flags = Array.isArray(qualityFlags) ? qualityFlags : [];
-
-    if (flags.includes('TOO_SHORT_FOR_RELIABLE_SCORING') || qualityScore < 0.55) {
+    if (
+      analytics.qualityScore === null ||
+      analytics.qualityScore < 0.45 ||
+      analytics.sampleCount < 20 ||
+      analytics.movingSeconds < 240 ||
+      flags.includes('SHORT_RIDE') ||
+      flags.includes('LOW_QUALITY')
+    ) {
       return ScoreConfidenceLevel.LOW;
     }
 
-    if (qualityScore < 0.8) {
+    if (
+      analytics.qualityScore < 0.75 ||
+      flags.includes('LOW_SAMPLE')
+    ) {
       return ScoreConfidenceLevel.MEDIUM;
     }
 
     return ScoreConfidenceLevel.HIGH;
   }
 
-  private normalizeScore(componentScore: number, componentMax: number) {
-    return Number(
-      this.clamp((componentScore / componentMax) * 100, 0, 100).toFixed(2),
-    );
+  private resolveConfidenceReason(
+    analytics: {
+      qualityScore: number | null;
+      qualityFlags: string[];
+      sampleCount: number;
+      movingSeconds: number;
+    },
+    level: ScoreConfidenceLevel,
+  ) {
+    const flags = analytics.qualityFlags;
+
+    if (level === ScoreConfidenceLevel.LOW) {
+      if (flags.includes('SHORT_RIDE')) {
+        return 'ride-too-short';
+      }
+      if (flags.includes('LOW_QUALITY') || (analytics.qualityScore ?? 0) < 0.45) {
+        return 'poor-telemetry-quality';
+      }
+      return 'insufficient-data';
+    }
+
+    if (level === ScoreConfidenceLevel.MEDIUM) {
+      if (flags.includes('LOW_SAMPLE')) {
+        return 'limited-sample-size';
+      }
+      return 'moderate-quality';
+    }
+
+    return 'high-quality-data';
+  }
+
+  private toStringArray(value: Prisma.JsonValue | null | undefined): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter((item): item is string => typeof item === 'string');
   }
 
   private clamp(value: number, min: number, max: number) {

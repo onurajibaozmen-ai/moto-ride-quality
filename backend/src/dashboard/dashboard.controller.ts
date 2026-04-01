@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { DashboardService } from './dashboard.service';
 
 @Controller('dashboard')
@@ -10,27 +10,28 @@ export class DashboardController {
     return this.dashboardService.getOverview();
   }
 
+  @Get('leaderboard')
+  getLeaderboard(@Query('limit') limit?: string) {
+    return this.dashboardService.getLeaderboard(limit ? Number(limit) : 20);
+  }
+
   @Get('rides')
   getRides(
-    @Query('status') status?: 'ACTIVE' | 'COMPLETED' | 'CANCELLED',
+    @Query('status') status?: string,
     @Query('userId') userId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
-    return this.dashboardService.getRides({ status, userId });
-  }
-
-  @Get('rides/:id/events')
-  getRideEvents(@Param('id') rideId: string) {
-    return this.dashboardService.getRideEvents(rideId);
-  }
-
-  @Get('rides/:id/score-breakdown')
-  getRideScoreBreakdown(@Param('id') rideId: string) {
-    return this.dashboardService.getRideScoreBreakdown(rideId);
-  }
-
-  @Get('rides/:id/detail')
-  getRideDetail(@Param('id') rideId: string) {
-    return this.dashboardService.getRideDetail(rideId);
+    return this.dashboardService.getRides({
+      status,
+      userId,
+      from,
+      to,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 20,
+    });
   }
 
   @Get('couriers')

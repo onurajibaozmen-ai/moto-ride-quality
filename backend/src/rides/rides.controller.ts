@@ -1,42 +1,38 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Post,
+  Req,
+} from '@nestjs/common';
 import { RidesService } from './rides.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { CurrentUser } from '../auth/current-user.decorator';
-import { StartRideDto } from './dto/start-ride.dto';
-import { EndRideDto } from './dto/end-ride.dto';
 
 @Controller('rides')
-@UseGuards(JwtAuthGuard)
 export class RidesController {
   constructor(private readonly ridesService: RidesService) {}
 
   @Post('start')
-  startRide(
-    @CurrentUser() user: { userId: string },
-    @Body() _body: StartRideDto,
-  ) {
-    return this.ridesService.startRide(user.userId);
+  startRide(@Req() req: any) {
+    return this.ridesService.startRide(req.user?.userId ?? req.user?.id);
   }
 
   @Get('active')
-  getActiveRide(@CurrentUser() user: { userId: string }) {
-    return this.ridesService.getActiveRide(user.userId);
+  getActiveRide(@Req() req: any) {
+    return this.ridesService.getActiveRide(req.user?.userId ?? req.user?.id);
   }
 
   @Get(':id')
-  getRideById(
-    @Param('id') id: string,
-    @CurrentUser() user: { userId: string },
-  ) {
-    return this.ridesService.getRideById(id, user.userId);
+  getRide(@Param('id') id: string, @Req() req: any) {
+    return this.ridesService.getRideById(id, req.user?.userId ?? req.user?.id);
+  }
+
+  @Get(':id/detail')
+  getRideDetail(@Param('id') id: string, @Req() req: any) {
+    return this.ridesService.getRideDetail(id, req.user?.userId ?? req.user?.id);
   }
 
   @Post(':id/end')
-  endRide(
-    @Param('id') id: string,
-    @CurrentUser() user: { userId: string },
-    @Body() _body: EndRideDto,
-  ) {
-    return this.ridesService.endRide(id, user.userId);
+  endRide(@Param('id') id: string, @Req() req: any) {
+    return this.ridesService.endRide(id, req.user?.userId ?? req.user?.id);
   }
 }

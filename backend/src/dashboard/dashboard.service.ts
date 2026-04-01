@@ -1,64 +1,59 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, RideStatus } from '@prisma/client';
+import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+
+type DashboardRideFilters = {
+  status?: string;
+  userId?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+};
 
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getOverview() {
-    const [totalCouriers, activeRides, completedRides, rideScores, events] =
+    const [totalCouriers, activeRides, completedRides, avgScoreAgg, totalEvents] =
       await Promise.all([
         this.prisma.user.count({
           where: { role: 'COURIER' },
         }),
         this.prisma.ride.count({
-          where: { status: RideStatus.ACTIVE },
+          where: { status: 'ACTIVE' },
         }),
         this.prisma.ride.count({
-          where: { status: RideStatus.COMPLETED },
+          where: { status: 'COMPLETED' },
         }),
-        this.prisma.rideScore.findMany({
-          select: { totalScore: true, confidenceLevel: true },
+        this.prisma.ride.aggregate({
+          _avg: { score: true },
+          where: {
+            status: 'COMPLETED',
+            score: { not: null },
+          },
         }),
         this.prisma.rideEvent.count(),
       ]);
-
-    const avgScore =
-      rideScores.length > 0
-        ? Number(
-            (
-              rideScores.reduce((sum, item) => sum + item.totalScore, 0) /
-              rideScores.length
-            ).toFixed(2),
-          )
-        : 0;
-
-    const lowConfidenceRideCount = rideScores.filter(
-      (item) => item.confidenceLevel === 'LOW',
-    ).length;
 
     return {
       totalCouriers,
       activeRides,
       completedRides,
-      totalEvents: events,
-      averageScore: avgScore,
-      lowConfidenceRideCount,
+      averageScore: avgScoreAgg._avg.score
+        ? Number(avgScoreAgg._avg.score.toFixed(2))
+        : null,
+      totalEvents,
     };
   }
 
-  async getRides(filters?: {
-    status?: 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
-    userId?: string;
-  }) {
-    const where: Prisma.RideWhereInput = {
-      ...(filters?.status ? { status: filters.status } : {}),
-      ...(filters?.userId ? { userId: filters.userId } : {}),
-    };
-
+  async getLeaderboard(limit = 20) {
     const rides = await this.prisma.ride.findMany({
-      where,
+      where: {
+        status: 'COMPLETED',
+        score: { not: null },
+      },
       include: {
         user: {
           select: {
@@ -67,337 +62,162 @@ export class DashboardService {
             phone: true,
           },
         },
-        analytics: true,
         scoreCard: true,
-        _count: {
-          select: {
-            rideEvents: true,
-            telemetryPoints: true,
-          },
-        },
+        analytics: true,
       },
-      orderBy: {
-        startedAt: 'desc',
-      },
-      take: 100,
+      orderBy: [{ score: 'desc' }, { startedAt: 'desc' }],
+      take: limit,
     });
 
-    return rides.map((ride) => ({
-      id: ride.id,
-      status: ride.status,
-      startedAt: ride.startedAt,
-      endedAt: ride.endedAt,
-      totalDistanceM: ride.analytics?.totalDistanceM ?? ride.totalDistanceM ?? 0,
-      durationS:
-        ride.durationS ??
-        ((ride.endedAt?.getTime() ?? Date.now()) - ride.startedAt.getTime()) /
-          1000,
-      score: ride.scoreCard?.totalScore ?? ride.score ?? null,
-      scoreVersion: ride.scoreCard?.scoringVersion ?? ride.scoreVersion ?? null,
-      confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
-      qualityScore: ride.analytics?.qualityScore ?? null,
-      qualityFlags: ride.analytics?.qualityFlags ?? [],
-      eventsCount: ride._count.rideEvents,
-      telemetryCount: ride._count.telemetryPoints,
+    return rides.map((ride, index) => ({
+      rank: index + 1,
+      rideId: ride.id,
       courier: ride.user,
+      score: ride.score,
+      confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
+      totalDistanceM: ride.totalDistanceM,
+      durationS: ride.durationS,
+      startedAt: ride.startedAt,
+      qualityScore: ride.analytics?.qualityScore ?? null,
     }));
   }
 
-  async getRideEvents(rideId: string) {
-    const ride = await this.prisma.ride.findUnique({
-      where: { id: rideId },
-      select: { id: true },
-    });
+  async getRides(filters: DashboardRideFilters) {
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(100, Math.max(1, filters.limit ?? 20));
+    const skip = (page - 1) * limit;
 
-    if (!ride) {
-      throw new NotFoundException('Ride not found');
+    const where: Prisma.RideWhereInput = {};
+
+    if (filters.status) {
+      where.status = filters.status as any;
     }
 
-    return this.prisma.rideEvent.findMany({
-      where: { rideId },
-      orderBy: { ts: 'asc' },
-    });
-  }
-
-  async getRideScoreBreakdown(rideId: string) {
-    const ride = await this.prisma.ride.findUnique({
-      where: { id: rideId },
-      include: {
-        analytics: true,
-        scoreCard: true,
-        rideEvents: true,
-      },
-    });
-
-    if (!ride) {
-      throw new NotFoundException('Ride not found');
+    if (filters.userId) {
+      where.userId = filters.userId;
     }
 
-    const breakdownJson =
-      ride.scoreCard?.breakdownJson &&
-      typeof ride.scoreCard.breakdownJson === 'object'
-        ? (ride.scoreCard.breakdownJson as Record<string, unknown>)
-        : {};
-
-    const events = Array.isArray(breakdownJson.events) ? breakdownJson.events : [];
-
-    return {
-      rideId: ride.id,
-      totalScore: ride.scoreCard?.totalScore ?? ride.score ?? null,
-      scoringVersion: ride.scoreCard?.scoringVersion ?? ride.scoreVersion ?? null,
-      confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
-      qualityScore: ride.analytics?.qualityScore ?? null,
-      qualityFlags: ride.analytics?.qualityFlags ?? [],
-      analytics: ride.analytics
-        ? {
-            sampleCount: ride.analytics.sampleCount,
-            validPointCount: ride.analytics.validPointCount,
-            gpsGapCount: ride.analytics.gpsGapCount,
-            lowAccuracyCount: ride.analytics.lowAccuracyCount,
-            movingSeconds: ride.analytics.movingSeconds,
-            idleSeconds: ride.analytics.idleSeconds,
-            totalDistanceM: ride.analytics.totalDistanceM,
-            avgSpeedKmh: ride.analytics.avgSpeedKmh,
-            p95SpeedKmh: ride.analytics.p95SpeedKmh,
-            maxSpeedKmh: ride.analytics.maxSpeedKmh,
-            medianAccuracyM: ride.analytics.medianAccuracyM,
-          }
-        : null,
-      eventCounts: {
-        harshBrake: ride.rideEvents.filter((event) => event.type === 'harsh_brake')
-          .length,
-        harshAccel: ride.rideEvents.filter((event) => event.type === 'harsh_accel')
-          .length,
-        speeding: ride.rideEvents.filter((event) => event.type === 'speeding').length,
-      },
-      components: {
-        ...breakdownJson,
-        events,
-      },
-    };
-  }
-
-  async getRideDetail(rideId: string) {
-    const ride = await this.prisma.ride.findUnique({
-      where: { id: rideId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        analytics: true,
-        scoreCard: true,
-        telemetryPoints: {
-          orderBy: { ts: 'asc' },
-          select: {
-            ts: true,
-            lat: true,
-            lng: true,
-            speedKmh: true,
-            accuracyM: true,
-            heading: true,
-            accelX: true,
-            accelY: true,
-            accelZ: true,
-          },
-        },
-        rideEvents: {
-          orderBy: { ts: 'asc' },
-          select: {
-            id: true,
-            type: true,
-            ts: true,
-            lat: true,
-            lng: true,
-            severity: true,
-            metaJson: true,
-          },
-        },
-      },
-    });
-
-    if (!ride) {
-      throw new NotFoundException('Ride not found');
+    if (filters.from || filters.to) {
+      where.startedAt = {};
+      if (filters.from) {
+        where.startedAt.gte = new Date(filters.from);
+      }
+      if (filters.to) {
+        where.startedAt.lte = new Date(filters.to);
+      }
     }
 
-    return {
-      id: ride.id,
-      status: ride.status,
-      startedAt: ride.startedAt,
-      endedAt: ride.endedAt,
-      score: ride.scoreCard?.totalScore ?? ride.score ?? null,
-      confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
-      courier: ride.user,
-      analytics: ride.analytics
-        ? {
-            totalDistanceM: ride.analytics.totalDistanceM,
-            movingSeconds: ride.analytics.movingSeconds,
-            idleSeconds: ride.analytics.idleSeconds,
-            avgSpeedKmh: ride.analytics.avgSpeedKmh,
-            p95SpeedKmh: ride.analytics.p95SpeedKmh,
-            maxSpeedKmh: ride.analytics.maxSpeedKmh,
-            medianAccuracyM: ride.analytics.medianAccuracyM,
-            qualityScore: ride.analytics.qualityScore,
-            qualityFlags: ride.analytics.qualityFlags ?? [],
-          }
-        : null,
-      telemetry: ride.telemetryPoints.map((point) => ({
-        timestamp: point.ts,
-        lat: point.lat,
-        lng: point.lng,
-        speedKmh: point.speedKmh,
-        accuracyM: point.accuracyM,
-        heading: point.heading,
-        accelX: point.accelX,
-        accelY: point.accelY,
-        accelZ: point.accelZ,
-      })),
-      events: ride.rideEvents.map((event) => {
-        const meta =
-          event.metaJson && typeof event.metaJson === 'object'
-            ? (event.metaJson as Record<string, unknown>)
-            : {};
-
-        return {
-          id: event.id,
-          type: event.type,
-          timestamp: event.ts,
-          lat: event.lat,
-          lng: event.lng,
-          severity: event.severity,
-          penalty:
-            typeof meta.penalty === 'number'
-              ? meta.penalty
-              : event.type === 'harsh_brake'
-                ? 4
-                : event.type === 'harsh_accel'
-                  ? 2
-                  : event.type === 'speeding'
-                    ? 3
-                    : 0,
-        };
+    const [total, rides] = await Promise.all([
+      this.prisma.ride.count({ where }),
+      this.prisma.ride.findMany({
+        where,
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+            },
+          },
+          analytics: true,
+          scoreCard: true,
+          _count: {
+            select: {
+              rideEvents: true,
+              telemetryPoints: true,
+            },
+          },
+        },
+        orderBy: {
+          startedAt: 'desc',
+        },
+        skip,
+        take: limit,
       }),
+    ]);
+
+    return {
+      page,
+      limit,
+      total,
+      items: rides.map((ride) => ({
+        id: ride.id,
+        status: ride.status,
+        startedAt: ride.startedAt,
+        endedAt: ride.endedAt,
+        durationS: ride.durationS,
+        totalDistanceM: ride.totalDistanceM,
+        score: ride.score,
+        courier: ride.user,
+        analytics: ride.analytics,
+        scoreCard: ride.scoreCard,
+        eventCount: ride._count.rideEvents,
+        telemetryCount: ride._count.telemetryPoints,
+      })),
     };
   }
 
   async getCouriers() {
     const couriers = await this.prisma.user.findMany({
-      where: {
-        role: 'COURIER',
-      },
+      where: { role: 'COURIER' },
       include: {
         rides: {
-          where: {
-            status: RideStatus.COMPLETED,
-          },
+          take: 1,
+          orderBy: { startedAt: 'desc' },
           include: {
             analytics: true,
             scoreCard: true,
-            _count: {
-              select: {
-                rideEvents: true,
-              },
-            },
-          },
-          orderBy: {
-            startedAt: 'desc',
           },
         },
       },
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: { createdAt: 'desc' },
     });
 
+    const now = Date.now();
+
     return couriers.map((courier) => {
-      const completedRides = courier.rides;
-      const totalRides = completedRides.length;
-
-      const avgScore =
-        totalRides > 0
-          ? Number(
-              (
-                completedRides.reduce(
-                  (sum, ride) => sum + (ride.scoreCard?.totalScore ?? ride.score ?? 0),
-                  0,
-                ) / totalRides
-              ).toFixed(2),
-            )
-          : 0;
-
-      const totalDistanceM = completedRides.reduce(
-        (sum, ride) => sum + (ride.analytics?.totalDistanceM ?? ride.totalDistanceM ?? 0),
-        0,
-      );
-
-      const totalEvents = completedRides.reduce(
-        (sum, ride) => sum + ride._count.rideEvents,
-        0,
-      );
-
-      const lowConfidenceRides = completedRides.filter(
-        (ride) => ride.scoreCard?.confidenceLevel === 'LOW',
-      ).length;
+      const lastRide = courier.rides[0] ?? null;
+      const online =
+        courier.lastSeenAt &&
+        now - new Date(courier.lastSeenAt).getTime() <= 60 * 1000;
 
       return {
         id: courier.id,
         name: courier.name,
         phone: courier.phone,
-        isActive: courier.isActive,
         lastSeenAt: courier.lastSeenAt,
-        totalCompletedRides: totalRides,
-        averageScore: avgScore,
-        totalDistanceM: Number(totalDistanceM.toFixed(2)),
-        totalEvents,
-        lowConfidenceRides,
+        online: Boolean(online),
+        lastRide,
       };
     });
   }
 
   async getPilotSummary() {
-    const [overview, couriers, recentCompletedRides] = await Promise.all([
-      this.getOverview(),
-      this.getCouriers(),
-      this.prisma.ride.findMany({
-        where: { status: RideStatus.COMPLETED },
-        include: {
-          analytics: true,
-          scoreCard: true,
-          user: {
-            select: {
-              name: true,
-              phone: true,
-            },
-          },
-          _count: {
-            select: {
-              rideEvents: true,
-            },
+    const riskyRides = await this.prisma.ride.findMany({
+      where: {
+        status: 'COMPLETED',
+        score: { not: null, lt: 70 },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
           },
         },
-        orderBy: { endedAt: 'desc' },
-        take: 10,
-      }),
-    ]);
+        analytics: true,
+        scoreCard: true,
+      },
+      orderBy: {
+        score: 'asc',
+      },
+      take: 10,
+    });
 
     return {
-      overview,
-      couriers,
-      recentCompletedRides: recentCompletedRides.map((ride) => ({
-        id: ride.id,
-        courierName: ride.user.name,
-        courierPhone: ride.user.phone,
-        startedAt: ride.startedAt,
-        endedAt: ride.endedAt,
-        totalDistanceM: ride.analytics?.totalDistanceM ?? ride.totalDistanceM ?? 0,
-        score: ride.scoreCard?.totalScore ?? ride.score ?? null,
-        confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
-        qualityScore: ride.analytics?.qualityScore ?? null,
-        eventsCount: ride._count.rideEvents,
-      })),
+      generatedAt: new Date(),
+      riskyRides,
     };
   }
 }
