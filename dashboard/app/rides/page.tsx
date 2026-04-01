@@ -32,9 +32,18 @@ type RidesResponse = {
   items: RideItem[];
 };
 
+function formatDuration(seconds: number | null | undefined) {
+  if (typeof seconds !== 'number') return '-';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 export default async function RidesPage() {
   const data = (await apiFetch('/dashboard/rides?page=1&limit=50')) as RidesResponse;
-
   const rides = Array.isArray(data?.items) ? data.items : [];
 
   return (
@@ -57,6 +66,7 @@ export default async function RidesPage() {
                 <th className="px-4 py-3">Score</th>
                 <th className="px-4 py-3">Confidence</th>
                 <th className="px-4 py-3">Distance</th>
+                <th className="px-4 py-3">Duration</th>
                 <th className="px-4 py-3">Events</th>
                 <th className="px-4 py-3">Started</th>
               </tr>
@@ -64,7 +74,7 @@ export default async function RidesPage() {
             <tbody>
               {rides.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
                     No rides found.
                   </td>
                 </tr>
@@ -98,6 +108,9 @@ export default async function RidesPage() {
                       {typeof ride.totalDistanceM === 'number'
                         ? `${(ride.totalDistanceM / 1000).toFixed(2)} km`
                         : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {formatDuration(ride.durationS)}
                     </td>
                     <td className="px-4 py-3 text-slate-700">{ride.eventCount ?? 0}</td>
                     <td className="px-4 py-3 text-slate-700">

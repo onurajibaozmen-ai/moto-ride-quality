@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { fetchJson } from '@/lib/api';
+import RideMapPanel from '../../../components/ride-map-panel';
 
 type RideDetailResponse = {
   ride: {
@@ -80,7 +81,6 @@ export default async function RideDetailPage(
   props: PageProps<'/rides/[id]'>
 ) {
   const { id } = await props.params;
-
   const data = (await fetchJson(`/rides/${id}/detail`)) as RideDetailResponse;
 
   const flags = Array.isArray(data?.analytics?.qualityFlags)
@@ -135,6 +135,8 @@ export default async function RideDetailPage(
             </div>
           </div>
         </div>
+
+        <RideMapPanel telemetry={data?.telemetry ?? []} events={data?.events ?? []} />
 
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
