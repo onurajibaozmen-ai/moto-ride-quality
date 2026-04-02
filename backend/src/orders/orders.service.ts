@@ -17,7 +17,7 @@ export class OrdersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async createOrder(dto: CreateOrderDto) {
-    return this.prisma.order.create({
+    const order = await this.prisma.order.create({
       data: {
         externalRef: dto.externalRef,
         pickupLat: dto.pickupLat,
@@ -52,6 +52,8 @@ export class OrdersService {
         },
       },
     });
+
+    return this.enrichOrder(order);
   }
 
   async listOrders(filters: ListOrdersFilters) {
@@ -107,7 +109,7 @@ export class OrdersService {
       page,
       limit,
       total,
-      items,
+      items: items.map((item) => this.enrichOrder(item)),
     };
   }
 
@@ -138,7 +140,7 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    return order;
+    return this.enrichOrder(order);
   }
 
   async assignOrder(orderId: string, dto: AssignOrderDto) {
@@ -168,7 +170,7 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    return this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { id: orderId },
       data: {
         assignedCourierId: dto.courierId,
@@ -195,6 +197,8 @@ export class OrdersService {
         },
       },
     });
+
+    return this.enrichOrder(updated);
   }
 
   async markPickedUp(orderId: string) {
@@ -206,7 +210,7 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    return this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { id: orderId },
       data: {
         status: OrderStatus.PICKED_UP,
@@ -232,6 +236,8 @@ export class OrdersService {
         },
       },
     });
+
+    return this.enrichOrder(updated);
   }
 
   async markDelivered(orderId: string) {
@@ -243,7 +249,7 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    return this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { id: orderId },
       data: {
         status: OrderStatus.DELIVERED,
@@ -269,6 +275,8 @@ export class OrdersService {
         },
       },
     });
+
+    return this.enrichOrder(updated);
   }
 
   async cancelOrder(orderId: string) {
@@ -280,7 +288,7 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    return this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { id: orderId },
       data: {
         status: OrderStatus.CANCELLED,
@@ -304,5 +312,250 @@ export class OrdersService {
         },
       },
     });
+
+    return this.enrichOrder(updated);
+  }
+
+  async getRideOrdersPlan(rideId: string) {
+    const ride = await this.prisma.ride.findUnique({
+      where: { id: rideId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
+        orders: {
+          orderBy: {
+            createdAt: 'asc',
+          },
+        },
+      },
+    });
+
+    if (!ride) {
+      throw new NotFoundException('Ride not found');
+    }
+
+    const orders = ride.orders.map((order) => this.enrichOrder(order));
+
+    const stops = this.buildStopsForOrders(orders);
+    const recommendedSequence = this.buildRecommendedSequence(stops);
+
+    return {
+      ride: {
+        id: ride.id,
+        status: ride.status,
+        startedAt: ride.startedAt,
+        endedAt: ride.endedAt,
+        score: ride.score,
+      },
+      courier: ride.user,
+      totalOrders: orders.length,
+      orders,
+      stops,
+      recommendedSequence,
+    };
+  }
+
+  private buildStopsForOrders(
+    orders: Array<ReturnType<OrdersService['enrichOrder']>>,
+  ) {
+    const stops = orders.flatMap((order) => [
+      {
+        stopId: `${order.id}-pickup`,
+        orderId: order.id,
+        orderRef: order.externalRef ?? order.id,
+        type: 'pickup' as const,
+        lat: order.pickupLat,
+        lng: order.pickupLng,
+        status: order.status,
+      },
+      {
+        stopId: `${order.id}-dropoff`,
+        orderId: order.id,
+        orderRef: order.externalRef ?? order.id,
+        type: 'dropoff' as const,
+        lat: order.dropoffLat,
+        lng: order.dropoffLng,
+        status: order.status,
+      },
+    ]);
+
+    return stops;
+  }
+
+  private buildRecommendedSequence(
+    stops: Array<{
+      stopId: string;
+      orderId: string;
+      orderRef: string;
+      type: 'pickup' | 'dropoff';
+      lat: number;
+      lng: number;
+      status: string;
+    }>,
+  ) {
+    if (stops.length === 0) {
+      return [];
+    }
+
+    const remaining = [...stops];
+    const ordered: typeof remaining = [];
+
+    let current = remaining.shift()!;
+    ordered.push(current);
+
+    while (remaining.length > 0) {
+      let nearestIndex = 0;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+
+      for (let i = 0; i < remaining.length; i++) {
+        const candidate = remaining[i];
+        const distance = this.haversineMeters(
+          current.lat,
+          current.lng,
+          candidate.lat,
+          candidate.lng,
+        );
+
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestIndex = i;
+        }
+      }
+
+      current = remaining.splice(nearestIndex, 1)[0];
+      ordered.push(current);
+    }
+
+    return ordered.map((stop, index) => ({
+      sequence: index + 1,
+      ...stop,
+    }));
+  }
+
+  private haversineMeters(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ) {
+    const toRad = (value: number) => (value * Math.PI) / 180;
+    const R = 6371000;
+
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLng / 2) ** 2;
+
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  private enrichOrder<T extends {
+    id: string;
+    externalRef: string | null;
+    pickupLat: number;
+    pickupLng: number;
+    dropoffLat: number;
+    dropoffLng: number;
+    estimatedPickupTime: Date | null;
+    estimatedDeliveryTime: Date | null;
+    actualPickupTime: Date | null;
+    actualDeliveryTime: Date | null;
+    assignedAt: Date | null;
+    pickedUpAt: Date | null;
+    deliveredAt: Date | null;
+    status: string;
+  }>(order: T) {
+    const pickupDelaySeconds = this.getDelaySeconds(
+      order.estimatedPickupTime,
+      order.actualPickupTime,
+    );
+
+    const deliveryDelaySeconds = this.getDelaySeconds(
+      order.estimatedDeliveryTime,
+      order.actualDeliveryTime,
+    );
+
+    const onTimePickup =
+      order.actualPickupTime && order.estimatedPickupTime
+        ? pickupDelaySeconds !== null && pickupDelaySeconds <= 0
+        : null;
+
+    const onTimeDelivery =
+      order.actualDeliveryTime && order.estimatedDeliveryTime
+        ? deliveryDelaySeconds !== null && deliveryDelaySeconds <= 0
+        : null;
+
+    const pickupEtaStatus = this.getEtaStatus(
+      order.estimatedPickupTime,
+      order.actualPickupTime,
+    );
+
+    const deliveryEtaStatus = this.getEtaStatus(
+      order.estimatedDeliveryTime,
+      order.actualDeliveryTime,
+    );
+
+    return {
+      ...order,
+      metrics: {
+        pickupDelaySeconds,
+        deliveryDelaySeconds,
+        onTimePickup,
+        onTimeDelivery,
+        pickupEtaStatus,
+        deliveryEtaStatus,
+      },
+    };
+  }
+
+  private getDelaySeconds(
+    estimated: Date | null,
+    actual: Date | null,
+  ): number | null {
+    if (!estimated || !actual) {
+      return null;
+    }
+
+    return Math.round((actual.getTime() - estimated.getTime()) / 1000);
+  }
+
+  private getEtaStatus(
+    estimated: Date | null,
+    actual: Date | null,
+  ): 'pending' | 'on_time' | 'late' | 'early' | 'unknown' {
+    if (!estimated && !actual) {
+      return 'unknown';
+    }
+
+    if (estimated && !actual) {
+      return 'pending';
+    }
+
+    if (!estimated || !actual) {
+      return 'unknown';
+    }
+
+    const diffSeconds = Math.round(
+      (actual.getTime() - estimated.getTime()) / 1000,
+    );
+
+    if (diffSeconds > 0) {
+      return 'late';
+    }
+
+    if (diffSeconds < 0) {
+      return 'early';
+    }
+
+    return 'on_time';
   }
 }

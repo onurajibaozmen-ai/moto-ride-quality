@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { AssignOrderDto } from './dto/assign-order.dto';
@@ -52,5 +60,10 @@ export class OrdersController {
   @Patch(':id/cancel')
   cancelOrder(@Param('id') id: string) {
     return this.ordersService.cancelOrder(id);
+  }
+
+  @Get('/ride/:rideId/plan')
+  getRideOrdersPlan(@Param('rideId') rideId: string) {
+    return this.ordersService.getRideOrdersPlan(rideId);
   }
 }

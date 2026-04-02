@@ -26,7 +26,6 @@ type CourierItem = {
 
 export default async function CouriersPage() {
   const couriers = (await apiFetch('/dashboard/couriers')) as CourierItem[];
-
   const items = Array.isArray(couriers) ? couriers : [];
 
   return (
@@ -35,7 +34,7 @@ export default async function CouriersPage() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Couriers</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Courier status and latest ride snapshot
+            Courier status, latest ride snapshot, and score detail access
           </p>
         </div>
 
@@ -50,12 +49,13 @@ export default async function CouriersPage() {
                 <th className="px-4 py-3">Last Ride</th>
                 <th className="px-4 py-3">Last Score</th>
                 <th className="px-4 py-3">Confidence</th>
+                <th className="px-4 py-3">Score View</th>
               </tr>
             </thead>
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
                     No couriers found.
                   </td>
                 </tr>
@@ -101,6 +101,14 @@ export default async function CouriersPage() {
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       {courier.lastRide?.scoreCard?.confidenceLevel ?? '-'}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link
+                        href={`/couriers/${courier.id}`}
+                        className="rounded-lg bg-black px-3 py-2 text-xs font-medium text-white hover:opacity-90"
+                      >
+                        View Score
+                      </Link>
                     </td>
                   </tr>
                 ))

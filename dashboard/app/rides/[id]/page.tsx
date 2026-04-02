@@ -97,6 +97,12 @@ export default async function RideDetailPage(
             <Link href="/rides" className="text-sm text-blue-600 hover:underline">
               ← Back to rides
             </Link>
+            <Link
+              href={`/rides/${id}/plan`}
+              className="inline-block rounded-lg bg-black px-4 py-2 text-white text-sm hover:opacity-90"
+            >
+              View Route Plan
+            </Link>
             <h1 className="mt-2 text-2xl font-semibold text-slate-900">
               Ride Detail
             </h1>
