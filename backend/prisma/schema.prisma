@@ -24,6 +24,14 @@ enum ScoreConfidenceLevel {
   HIGH
 }
 
+enum OrderStatus {
+  PENDING
+  ASSIGNED
+  PICKED_UP
+  DELIVERED
+  CANCELLED
+}
+
 model User {
   id           String   @id @default(cuid())
   name         String
@@ -38,27 +46,29 @@ model User {
   rides             Ride[]
   devices           Device[]
   telemetryBatches  TelemetryBatchIngest[]
+  assignedOrders    Order[] @relation("CourierOrders")
 }
 
 model Ride {
-  id             String     @id @default(cuid())
-  userId         String
-  startedAt      DateTime
-  endedAt        DateTime?
-  status         RideStatus @default(ACTIVE)
-  totalDistanceM Float?     @default(0)
-  durationS      Int?       @default(0)
-  score          Float?
-  scoreVersion   String?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  id               String     @id @default(cuid())
+  userId           String
+  startedAt        DateTime
+  endedAt          DateTime?
+  status           RideStatus @default(ACTIVE)
+  totalDistanceM   Float?     @default(0)
+  durationS        Int?       @default(0)
+  score            Float?
+  scoreVersion     String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
-  user              User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  telemetryPoints   TelemetryPoint[]
-  rideEvents        RideEvent[]
-  analytics         RideAnalytics?
-  scoreCard         RideScore?
-  telemetryBatches  TelemetryBatchIngest[]
+  user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  telemetryPoints  TelemetryPoint[]
+  rideEvents       RideEvent[]
+  analytics        RideAnalytics?
+  scoreCard        RideScore?
+  telemetryBatches TelemetryBatchIngest[]
+  orders           Order[]
 
   @@index([userId, status])
   @@index([startedAt])
@@ -170,4 +180,38 @@ model TelemetryBatchIngest {
   @@index([rideId])
   @@index([userId])
   @@index([receivedAt])
+}
+
+model Order {
+  id                    String      @id @default(cuid())
+  externalRef           String?
+  pickupLat             Float
+  pickupLng             Float
+  dropoffLat            Float
+  dropoffLng            Float
+  status                OrderStatus @default(PENDING)
+
+  assignedCourierId     String?
+  rideId                String?
+
+  assignedAt            DateTime?
+  pickedUpAt            DateTime?
+  deliveredAt           DateTime?
+
+  estimatedPickupTime   DateTime?
+  estimatedDeliveryTime DateTime?
+  actualPickupTime      DateTime?
+  actualDeliveryTime    DateTime?
+
+  notes                 String?
+
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  courier User? @relation("CourierOrders", fields: [assignedCourierId], references: [id], onDelete: SetNull)
+  ride    Ride? @relation(fields: [rideId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([assignedCourierId, status])
+  @@index([rideId])
 }
