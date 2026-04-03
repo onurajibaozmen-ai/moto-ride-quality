@@ -514,6 +514,44 @@ export class DashboardService {
       );
     }
 
+    const sequenceScores: number[] = [];
+
+    for (const ride of rides) {
+      if (ride.orders.length < 2) continue;
+
+      const plan = await this.prisma.order.findMany({
+        where: { rideId: ride.id },
+      });
+
+      if (plan.length < 2) continue;
+
+      const recommended = [...plan].sort(
+        (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      );
+
+      const actual = [...plan]
+        .filter((o) => o.actualDeliveryTime)
+        .sort(
+          (a, b) =>
+            new Date(a.actualDeliveryTime!).getTime() -
+            new Date(b.actualDeliveryTime!).getTime(),
+        );
+
+      if (actual.length < 2) continue;
+
+      let correct = 0;
+
+      for (let i = 0; i < Math.min(recommended.length, actual.length); i++) {
+        if (recommended[i].id === actual[i].id) {
+          correct++;
+        }
+      }
+
+      const accuracy = correct / Math.min(recommended.length, actual.length);
+      sequenceScores.push(accuracy * 100);
+    }
+
     let multiOrderScore: number | null = null;
     if (rides.length > 0) {
       const multiOrderRateScore = this.clamp(multiOrderRate * 100, 0, 100);
@@ -523,10 +561,16 @@ export class DashboardService {
         100,
       );
 
+      const avgSequenceScore =
+        sequenceScores.length > 0
+          ? sequenceScores.reduce((sum, v) => sum + v, 0) / sequenceScores.length
+          : null;
+
       multiOrderScore = Number(
         (
-          multiOrderRateScore * 0.5 +
-          averageOrdersPerRideScore * 0.5
+          multiOrderRateScore * 0.3 +
+          averageOrdersPerRideScore * 0.3 +
+          (avgSequenceScore ?? 50) * 0.4
         ).toFixed(2),
       );
     }
@@ -593,6 +637,15 @@ export class DashboardService {
         averageOrdersPerRide:
           rides.length > 0
             ? Number(averageOrdersPerRide.toFixed(2))
+            : null,
+        averageSequenceAccuracy:
+          sequenceScores.length > 0
+            ? Number(
+                (
+                  sequenceScores.reduce((sum, v) => sum + v, 0) /
+                  sequenceScores.length
+                ).toFixed(2),
+              )
             : null,
       },
       score: {

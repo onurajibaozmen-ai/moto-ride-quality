@@ -320,13 +320,7 @@ export class OrdersService {
     const ride = await this.prisma.ride.findUnique({
       where: { id: rideId },
       include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
+        user: true,
         orders: {
           orderBy: {
             createdAt: 'asc',
@@ -339,10 +333,37 @@ export class OrdersService {
       throw new NotFoundException('Ride not found');
     }
 
-    const orders = ride.orders.map((order) => this.enrichOrder(order));
-
+    const orders = ride.orders.map((o) => this.enrichOrder(o));
     const stops = this.buildStopsForOrders(orders);
     const recommendedSequence = this.buildRecommendedSequence(stops);
+
+    const actualStops = stops
+      .map((stop) => {
+        const order = orders.find((o) => o.id === stop.orderId);
+
+        let actualTs: Date | null = null;
+
+        if (stop.type === 'pickup') {
+          actualTs = order?.actualPickupTime ?? null;
+        } else {
+          actualTs = order?.actualDeliveryTime ?? null;
+        }
+
+        return {
+          ...stop,
+          actualTs,
+        };
+      })
+      .filter((s) => s.actualTs !== null)
+      .sort(
+        (a, b) =>
+          new Date(a.actualTs as Date).getTime() -
+          new Date(b.actualTs as Date).getTime(),
+      )
+      .map((s, index) => ({
+        sequence: index + 1,
+        ...s,
+      }));
 
     return {
       ride: {
@@ -357,6 +378,7 @@ export class OrdersService {
       orders,
       stops,
       recommendedSequence,
+      actualSequence: actualStops,
     };
   }
 
