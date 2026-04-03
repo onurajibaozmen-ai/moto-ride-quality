@@ -34,6 +34,11 @@ export class DashboardController {
     });
   }
 
+  @Get('rides/:id/detail')
+  getRideDetail(@Param('id') id: string) {
+    return this.dashboardService.getRideDetail(id);
+  }
+
   @Get('couriers')
   getCouriers() {
     return this.dashboardService.getCouriers();

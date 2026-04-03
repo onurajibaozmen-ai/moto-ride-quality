@@ -72,13 +72,32 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  String? get _activeRideId {
+    final dynamic id = _activeRide?['id'];
+    if (id == null) return null;
+    return id.toString();
+  }
+
+  void _setError(Object error) {
+    if (!mounted) return;
+    setState(() {
+      _errorText = error.toString();
+    });
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   void _startAccelerometer() {
     _accelerometerSubscription?.cancel();
 
     const alpha = 0.2;
 
-    _accelerometerSubscription =
-        accelerometerEventStream().listen((event) {
+    _accelerometerSubscription = accelerometerEventStream().listen((event) {
       _accelX = event.x;
       _accelY = event.y;
       _accelZ = event.z;
@@ -108,20 +127,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         return;
       }
 
-      final activeRide = await _ridesApi.getActiveRide(token);
+      Map<String, dynamic>? activeRide;
+
+      try {
+        activeRide = await _ridesApi.getActiveRide(token);
+      } catch (_) {
+        activeRide = null;
+      }
+
+      if (!mounted) return;
 
       setState(() {
         _token = token;
         _activeRide = activeRide;
+        _errorText = null;
       });
 
       if (activeRide != null) {
         await _startTelemetryLoop();
       }
     } catch (e) {
-      setState(() {
-        _errorText = e.toString();
-      });
+      _setError(e);
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -196,7 +222,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       'ts': DateTime.now().toUtc().toIso8601String(),
       'lat': position.latitude,
       'lng': position.longitude,
-      'speedKmh': (position.speed >= 0 ? position.speed * 3.6 : 0),
+      'speedKmh': position.speed >= 0 ? position.speed * 3.6 : 0,
       'accuracyM': position.accuracy,
       'heading': position.heading,
       'accelX': _accelX,
@@ -216,8 +242,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final locationSettings = _buildLocationSettings();
 
     _positionSubscription =
-        Geolocator.getPositionStream(locationSettings: locationSettings)
-            .listen(
+        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
       (position) {
         _lastPosition = position;
         _pendingPoints.add(_buildPoint(position));
@@ -227,11 +252,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
       },
       onError: (error) {
-        if (mounted) {
-          setState(() {
-            _errorText = error.toString();
-          });
-        }
+        _setError(error);
       },
     );
   }
@@ -239,50 +260,64 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _flushPendingPoints() async {
     if (_token == null || _activeRide == null) return;
     if (_pendingPoints.isEmpty) return;
+    if (_activeRideId == null) return;
 
     final pointsToSend = List<Map<String, dynamic>>.from(_pendingPoints);
     _pendingPoints.clear();
 
-    final result = await _telemetryApi.sendBatch(
-      token: _token!,
-      rideId: _activeRide!['id'],
-      points: pointsToSend,
-    );
+    try {
+      final result = await _telemetryApi.sendBatch(
+        token: _token!,
+        rideId: _activeRideId!,
+        points: pointsToSend,
+      );
 
-    setState(() {
-      _activeRide = {
-        ..._activeRide!,
-        'score': result['score'],
-      };
-      _lastTelemetryResult = result.toString();
-    });
+      if (!mounted) return;
+
+      setState(() {
+        _activeRide = {
+          ...?_activeRide,
+          'score': result['score'],
+        };
+        _lastTelemetryResult = result.toString();
+      });
+    } catch (e) {
+      _pendingPoints.insertAll(0, pointsToSend);
+      _setError(e);
+    }
   }
 
   Future<void> _sendLiveTelemetryOnce() async {
-    if (_token == null || _activeRide == null) return;
+    if (_token == null || _activeRide == null || _activeRideId == null) return;
 
-    final granted = await _ensureLocationPermission();
-    if (!granted) return;
+    try {
+      final granted = await _ensureLocationPermission();
+      if (!granted) return;
 
-    final position = await Geolocator.getCurrentPosition(
-      locationSettings: _buildLocationSettings(),
-    );
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: _buildLocationSettings(),
+      );
 
-    _lastPosition = position;
+      _lastPosition = position;
 
-    final result = await _telemetryApi.sendBatch(
-      token: _token!,
-      rideId: _activeRide!['id'],
-      points: [_buildPoint(position)],
-    );
+      final result = await _telemetryApi.sendBatch(
+        token: _token!,
+        rideId: _activeRideId!,
+        points: [_buildPoint(position)],
+      );
 
-    setState(() {
-      _activeRide = {
-        ..._activeRide!,
-        'score': result['score'],
-      };
-      _lastTelemetryResult = result.toString();
-    });
+      if (!mounted) return;
+
+      setState(() {
+        _activeRide = {
+          ...?_activeRide,
+          'score': result['score'],
+        };
+        _lastTelemetryResult = result.toString();
+      });
+    } catch (e) {
+      _setError(e);
+    }
   }
 
   Future<void> _startTelemetryLoop() async {
@@ -293,11 +328,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       try {
         await _flushPendingPoints();
       } catch (e) {
-        if (mounted) {
-          setState(() {
-            _errorText = e.toString();
-          });
-        }
+        _setError(e);
       }
     });
   }
@@ -310,7 +341,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _startRide() async {
-    if (_token == null) return;
+    if (_token == null || _token!.isEmpty) {
+      _setError('Missing auth token');
+      return;
+    }
 
     setState(() {
       _isActionLoading = true;
@@ -320,20 +354,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     try {
       final ride = await _ridesApi.startRide(_token!);
 
+      if (!mounted) return;
+
       setState(() {
         _activeRide = ride;
+        _errorText = null;
       });
 
       await _startTelemetryLoop();
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ride started')),
-      );
+      _showMessage('Ride started');
     } catch (e) {
-      setState(() {
-        _errorText = e.toString();
-      });
+      _setError(e);
     } finally {
       if (mounted) {
         setState(() => _isActionLoading = false);
@@ -342,7 +373,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _endRide() async {
-    if (_token == null || _activeRide == null) return;
+    if (_token == null || _token!.isEmpty) {
+      _setError('Missing auth token');
+      return;
+    }
+
+    if (_activeRide == null || _activeRideId == null || _activeRideId!.isEmpty) {
+      _setError('No active ride found');
+      return;
+    }
 
     setState(() {
       _isActionLoading = true;
@@ -350,31 +389,42 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
 
     try {
-      await _flushPendingPoints();
+      debugPrint('🛑 Ending ride with id: $_activeRideId');
+
+      try {
+        await _flushPendingPoints().timeout(const Duration(seconds: 5));
+      } catch (e) {
+        debugPrint('⚠️ flush before endRide failed: $e');
+      }
+
       _stopTelemetryLoop();
 
-      await _ridesApi.endRide(
-        token: _token!,
-        rideId: _activeRide!['id'],
-      );
+      final response = await _ridesApi.endRide(_token!, _activeRideId!);
+
+      debugPrint('✅ endRide response: $response');
+
+      if (!mounted) return;
 
       setState(() {
         _activeRide = null;
         _lastTelemetryResult = null;
         _pendingPoints.clear();
+        _errorText = null;
       });
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ride ended')),
-      );
+      _showMessage('Ride ended');
     } catch (e) {
+      debugPrint('❌ endRide error: $e');
+
+      if (!mounted) return;
       setState(() {
         _errorText = e.toString();
       });
     } finally {
       if (mounted) {
-        setState(() => _isActionLoading = false);
+        setState(() {
+          _isActionLoading = false;
+        });
       }
     }
   }
@@ -406,7 +456,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     final score = _activeRide?['score']?.toString() ?? '-';
-    final rideId = _activeRide?['id']?.toString() ?? '-';
+    final rideId = _activeRideId ?? '-';
     final startedAt = _activeRide?['startedAt']?.toString();
     final speedKmh = _lastPosition != null
         ? (_lastPosition!.speed * 3.6).toStringAsFixed(2)

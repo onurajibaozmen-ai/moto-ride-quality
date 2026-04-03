@@ -1,24 +1,26 @@
 import Link from 'next/link';
 import { fetchJson } from '@/lib/api';
-import RideMapPanel from '../../../components/ride-map-panel';
 
 type RideDetailResponse = {
-  ride: {
-    id: string;
-    status: string;
-    startedAt: string;
-    endedAt: string | null;
-    durationS: number | null;
-    totalDistanceM: number | null;
-    score: number | null;
-    scoreVersion: string | null;
-  };
-  courier: {
+  id: string;
+  userId: string;
+  startedAt: string;
+  endedAt: string | null;
+  status: string;
+  totalDistanceM: number | null;
+  durationS: number | null;
+  score: number | null;
+  scoreVersion: string | null;
+  createdAt: string;
+  updatedAt: string;
+  user: {
     id: string;
     name: string;
     phone: string;
   };
   analytics: {
+    id: string;
+    rideId: string;
     sampleCount: number;
     validPointCount: number;
     gpsGapCount: number;
@@ -32,8 +34,12 @@ type RideDetailResponse = {
     medianAccuracyM: number | null;
     qualityScore: number | null;
     qualityFlags: unknown;
+    createdAt: string;
+    updatedAt: string;
   } | null;
   scoreCard: {
+    id: string;
+    rideId: string;
     totalScore: number;
     safetyScore: number | null;
     complianceScore: number | null;
@@ -42,71 +48,92 @@ type RideDetailResponse = {
     confidenceLevel: string;
     scoringVersion: string;
     breakdownJson: unknown;
+    createdAt: string;
+    updatedAt: string;
   } | null;
-  events: Array<{
+  telemetryPoints: Array<{
     id: string;
-    type: string;
-    ts: string;
-    lat: number | null;
-    lng: number | null;
-    severity: number | null;
-  }>;
-  telemetry: Array<{
     ts: string;
     lat: number;
     lng: number;
     speedKmh: number | null;
     accuracyM: number | null;
     heading: number | null;
+    accelX: number | null;
+    accelY: number | null;
+    accelZ: number | null;
   }>;
-  insights: Array<{
-    code: string;
-    level: 'info' | 'warning' | 'critical';
-    title: string;
-    message: string;
+  rideEvents: Array<{
+    id: string;
+    type: string;
+    ts: string;
+    lat: number | null;
+    lng: number | null;
+    severity: number | null;
+    metaJson: unknown;
+  }>;
+  orders: Array<{
+    id: string;
+    externalRef: string | null;
+    status: string;
+    estimatedPickupTime: string | null;
+    estimatedDeliveryTime: string | null;
+    actualPickupTime: string | null;
+    actualDeliveryTime: string | null;
   }>;
 };
 
 function formatDuration(seconds: number | null | undefined) {
   if (typeof seconds !== 'number') return '-';
+
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
+
   if (h > 0) return `${h}h ${m}m ${s}s`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
 }
 
 export default async function RideDetailPage(
   props: PageProps<'/rides/[id]'>
 ) {
   const { id } = await props.params;
-  const data = (await fetchJson(`/rides/${id}/detail`)) as RideDetailResponse;
+
+  const data = (await fetchJson(`/dashboard/rides/${id}/detail`)) as RideDetailResponse;
 
   const flags = Array.isArray(data?.analytics?.qualityFlags)
-    ? data.analytics.qualityFlags.filter(
-        (item): item is string => typeof item === 'string'
+    ? data.analytics!.qualityFlags.filter(
+        (item): item is string => typeof item === 'string',
       )
     : [];
 
   return (
     <main className="min-h-screen bg-slate-50 p-6">
       <div className="mx-auto max-w-7xl space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <Link href="/rides" className="text-sm text-blue-600 hover:underline">
               ← Back to rides
             </Link>
-            <Link
-              href={`/rides/${id}/plan`}
-              className="inline-block rounded-lg bg-black px-4 py-2 text-white text-sm hover:opacity-90"
-            >
-              View Route Plan
-            </Link>
             <h1 className="mt-2 text-2xl font-semibold text-slate-900">
               Ride Detail
             </h1>
-            <p className="mt-1 font-mono text-xs text-slate-500">{data?.ride?.id}</p>
+            <p className="mt-1 font-mono text-xs text-slate-500">{data?.id}</p>
+          </div>
+
+          <div className="md:pt-1">
+            <Link
+              href={`/rides/${id}/plan`}
+              className="inline-flex rounded-lg bg-black px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+            >
+              View Route Plan
+            </Link>
           </div>
         </div>
 
@@ -114,15 +141,15 @@ export default async function RideDetailPage(
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="text-sm text-slate-500">Score</div>
             <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {typeof data?.ride?.score === 'number' ? data.ride.score.toFixed(2) : '-'}
+              {typeof data?.score === 'number' ? data.score.toFixed(2) : '-'}
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="text-sm text-slate-500">Distance</div>
             <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {typeof data?.ride?.totalDistanceM === 'number'
-                ? `${(data.ride.totalDistanceM / 1000).toFixed(2)} km`
+              {typeof data?.totalDistanceM === 'number'
+                ? `${(data.totalDistanceM / 1000).toFixed(2)} km`
                 : '-'}
             </div>
           </div>
@@ -130,7 +157,7 @@ export default async function RideDetailPage(
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="text-sm text-slate-500">Duration</div>
             <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {formatDuration(data?.ride?.durationS)}
+              {formatDuration(data?.durationS)}
             </div>
           </div>
 
@@ -142,8 +169,6 @@ export default async function RideDetailPage(
           </div>
         </div>
 
-        <RideMapPanel telemetry={data?.telemetry ?? []} events={data?.events ?? []} />
-
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
             <h2 className="text-lg font-semibold text-slate-900">Ride Summary</h2>
@@ -152,34 +177,26 @@ export default async function RideDetailPage(
               <div>
                 <div className="text-sm text-slate-500">Courier</div>
                 <div className="mt-1 font-medium text-slate-900">
-                  {data?.courier?.name ?? '-'}
+                  {data?.user?.name ?? '-'}
                 </div>
-                <div className="text-sm text-slate-500">{data?.courier?.phone ?? '-'}</div>
+                <div className="text-sm text-slate-500">{data?.user?.phone ?? '-'}</div>
               </div>
 
               <div>
                 <div className="text-sm text-slate-500">Status</div>
                 <div className="mt-1 font-medium text-slate-900">
-                  {data?.ride?.status ?? '-'}
+                  {data?.status ?? '-'}
                 </div>
               </div>
 
               <div>
                 <div className="text-sm text-slate-500">Started</div>
-                <div className="mt-1 text-slate-900">
-                  {data?.ride?.startedAt
-                    ? new Date(data.ride.startedAt).toLocaleString()
-                    : '-'}
-                </div>
+                <div className="mt-1 text-slate-900">{formatDate(data?.startedAt)}</div>
               </div>
 
               <div>
                 <div className="text-sm text-slate-500">Ended</div>
-                <div className="mt-1 text-slate-900">
-                  {data?.ride?.endedAt
-                    ? new Date(data.ride.endedAt).toLocaleString()
-                    : '-'}
-                </div>
+                <div className="mt-1 text-slate-900">{formatDate(data?.endedAt)}</div>
               </div>
             </div>
           </div>
@@ -307,27 +324,43 @@ export default async function RideDetailPage(
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">Insights</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Orders</h2>
 
-            <div className="mt-4 space-y-3">
-              {Array.isArray(data?.insights) && data.insights.length > 0 ? (
-                data.insights.map((insight) => (
-                  <div
-                    key={insight.code}
-                    className="rounded-xl border border-slate-200 p-4"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="font-medium text-slate-900">{insight.title}</div>
-                      <span className="text-xs uppercase tracking-wide text-slate-500">
-                        {insight.level}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm text-slate-600">{insight.message}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="text-sm text-slate-500">No insights available.</div>
-              )}
+            <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-left text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Order</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Est. Delivery</th>
+                    <th className="px-4 py-3">Actual Delivery</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.orders.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
+                        No orders linked to this ride.
+                      </td>
+                    </tr>
+                  ) : (
+                    data.orders.map((order) => (
+                      <tr key={order.id} className="border-t border-slate-100">
+                        <td className="px-4 py-3 font-mono text-xs text-slate-900">
+                          {order.externalRef ?? order.id}
+                        </td>
+                        <td className="px-4 py-3 text-slate-700">{order.status}</td>
+                        <td className="px-4 py-3 text-slate-700">
+                          {formatDate(order.estimatedDeliveryTime)}
+                        </td>
+                        <td className="px-4 py-3 text-slate-700">
+                          {formatDate(order.actualDeliveryTime)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -347,13 +380,17 @@ export default async function RideDetailPage(
                 </tr>
               </thead>
               <tbody>
-                {Array.isArray(data?.events) && data.events.length > 0 ? (
-                  data.events.map((event) => (
+                {data.rideEvents.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
+                      No events found.
+                    </td>
+                  </tr>
+                ) : (
+                  data.rideEvents.map((event) => (
                     <tr key={event.id} className="border-t border-slate-100">
                       <td className="px-4 py-3 text-slate-900">{event.type}</td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {event.ts ? new Date(event.ts).toLocaleString() : '-'}
-                      </td>
+                      <td className="px-4 py-3 text-slate-700">{formatDate(event.ts)}</td>
                       <td className="px-4 py-3 text-slate-700">
                         {typeof event.severity === 'number'
                           ? event.severity.toFixed(2)
@@ -367,16 +404,60 @@ export default async function RideDetailPage(
                       </td>
                     </tr>
                   ))
-                ) : (
-                  <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
-                      No events found.
-                    </td>
-                  </tr>
                 )}
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Telemetry Points</h2>
+
+          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-left text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Time</th>
+                  <th className="px-4 py-3">Lat</th>
+                  <th className="px-4 py-3">Lng</th>
+                  <th className="px-4 py-3">Speed</th>
+                  <th className="px-4 py-3">Accuracy</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.telemetryPoints.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
+                      No telemetry points found.
+                    </td>
+                  </tr>
+                ) : (
+                  data.telemetryPoints.slice(0, 100).map((point) => (
+                    <tr key={point.id} className="border-t border-slate-100">
+                      <td className="px-4 py-3 text-slate-700">{formatDate(point.ts)}</td>
+                      <td className="px-4 py-3 text-slate-700">{point.lat.toFixed(5)}</td>
+                      <td className="px-4 py-3 text-slate-700">{point.lng.toFixed(5)}</td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {typeof point.speedKmh === 'number'
+                          ? `${point.speedKmh.toFixed(2)} km/h`
+                          : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {typeof point.accuracyM === 'number'
+                          ? `${point.accuracyM.toFixed(2)} m`
+                          : '-'}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {data.telemetryPoints.length > 100 && (
+            <div className="mt-3 text-xs text-slate-500">
+              Showing first 100 telemetry points.
+            </div>
+          )}
         </div>
       </div>
     </main>

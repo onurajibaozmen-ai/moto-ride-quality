@@ -1,72 +1,89 @@
 import 'package:dio/dio.dart';
-import '../../../core/constants/api_constants.dart';
+
+import '../../../core/network/api_client.dart';
 
 class RidesApi {
-  final Dio _dio = Dio(
-    BaseOptions(
-      baseUrl: ApiConstants.baseUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 10),
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    ),
-  );
+  final Dio _dio = ApiClient.dio;
 
-  Future<Map<String, dynamic>?> getActiveRide(String token) async {
-    final response = await _dio.get(
-      '/rides/active',
-      options: Options(
-        headers: {
-          'Authorization': 'Bearer $token',
-        },
-      ),
-    );
+  Map<String, dynamic>? _safeMap(dynamic data) {
+    if (data == null) return null;
 
-    if (response.data == null || response.data == '') {
-      return null;
+    if (data is Map<String, dynamic>) {
+      return data;
     }
 
-    if (response.data is Map<String, dynamic>) {
-      return response.data as Map<String, dynamic>;
+    if (data is Map) {
+      return Map<String, dynamic>.from(data);
     }
 
     return null;
   }
 
+  Future<Map<String, dynamic>?> getActiveRide(String token) async {
+    try {
+      final response = await _dio.get(
+        '/rides/active',
+        options: ApiClient.authOptions(token),
+      );
+
+      return _safeMap(response.data);
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.receiveTimeout ||
+          e.response?.statusCode == 404 ||
+          e.response?.statusCode == 401 ||
+          e.response?.statusCode == 500) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
   Future<Map<String, dynamic>> startRide(String token) async {
     final response = await _dio.post(
       '/rides/start',
-      data: {},
-      options: Options(
-        headers: {
-          'Authorization': 'Bearer $token',
-        },
-      ),
+      options: ApiClient.authOptions(token),
     );
 
-    return Map<String, dynamic>.from(response.data as Map);
+    final data = _safeMap(response.data);
+    if (data == null) {
+      throw Exception('startRide response is not a JSON object: ${response.data}');
+    }
+
+    return data;
   }
 
-  Future<Map<String, dynamic>> endRide({
-    required String token,
-    required String rideId,
-    double totalDistanceM = 0,
-    int durationS = 0,
-  }) async {
-    final response = await _dio.post(
-      '/rides/$rideId/end',
-      data: {
-        'totalDistanceM': totalDistanceM,
-        'durationS': durationS,
-      },
-      options: Options(
-        headers: {
-          'Authorization': 'Bearer $token',
-        },
-      ),
+  Future<Map<String, dynamic>> endRide(String token, String rideId) async {
+    try {
+      final response = await _dio.post(
+        '/rides/$rideId/end',
+        options: ApiClient.authOptions(token),
+      );
+
+      final data = _safeMap(response.data);
+      if (data == null) {
+        throw Exception('endRide response is not a JSON object: ${response.data}');
+      }
+
+      return data;
+    } on DioException catch (e) {
+      throw Exception(
+        'endRide failed [${e.response?.statusCode}]: ${e.response?.data}',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> getRideDetail(String token, String rideId) async {
+    final response = await _dio.get(
+      '/rides/$rideId/detail',
+      options: ApiClient.authOptions(token),
     );
 
-    return Map<String, dynamic>.from(response.data as Map);
+    final data = _safeMap(response.data);
+    if (data == null) {
+      throw Exception('getRideDetail response is not a JSON object: ${response.data}');
+    }
+
+    return data;
   }
 }

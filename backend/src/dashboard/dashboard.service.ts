@@ -167,6 +167,44 @@ export class DashboardService {
     };
   }
 
+  async getRideDetail(id: string) {
+    const ride = await this.prisma.ride.findUnique({
+      where: { id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
+        analytics: true,
+        scoreCard: true,
+        telemetryPoints: {
+          orderBy: {
+            ts: 'asc',
+          },
+        },
+        rideEvents: {
+          orderBy: {
+            ts: 'asc',
+          },
+        },
+        orders: {
+          orderBy: {
+            createdAt: 'asc',
+          },
+        },
+      },
+    });
+
+    if (!ride) {
+      throw new NotFoundException('Ride not found');
+    }
+
+    return ride;
+  }
+
   async getCouriers() {
     const couriers = await this.prisma.user.findMany({
       where: { role: 'COURIER' },
@@ -284,14 +322,14 @@ export class DashboardService {
         pickupDelays.length > 0
           ? Math.round(
               pickupDelays.reduce((sum, value) => sum + value, 0) /
-                pickupDelays.length,
+                  pickupDelays.length,
             )
           : null,
       averageDeliveryDelaySeconds:
         deliveryDelays.length > 0
           ? Math.round(
               deliveryDelays.reduce((sum, value) => sum + value, 0) /
-                deliveryDelays.length,
+                  deliveryDelays.length,
             )
           : null,
     };
@@ -456,34 +494,37 @@ export class DashboardService {
       .filter((value): value is number => typeof value === 'number');
 
     const deliveredPerRideBase =
-      rides.length > 0 ? deliveredOrders.length / rides.length : 0;
+        rides.length > 0 ? deliveredOrders.length / rides.length : 0;
 
-    const multiOrderRideCount = rides.filter((ride) => ride.orders.length >= 2).length;
-    const multiOrderRate = rides.length > 0 ? multiOrderRideCount / rides.length : 0;
+    const multiOrderRideCount =
+        rides.filter((ride) => ride.orders.length >= 2).length;
+    const multiOrderRate =
+        rides.length > 0 ? multiOrderRideCount / rides.length : 0;
 
     const averageOrdersPerRide =
-      rides.length > 0
-        ? rides.reduce((sum, ride) => sum + ride.orders.length, 0) / rides.length
-        : 0;
+        rides.length > 0
+            ? rides.reduce((sum, ride) => sum + ride.orders.length, 0) /
+                rides.length
+            : 0;
 
     const drivingScore =
-      completedRideScores.length > 0
-        ? Number(
-            (
-              completedRideScores.reduce((sum, value) => sum + value, 0) /
-              completedRideScores.length
-            ).toFixed(2),
-          )
-        : null;
+        completedRideScores.length > 0
+            ? Number(
+                (
+                  completedRideScores.reduce((sum, value) => sum + value, 0) /
+                  completedRideScores.length
+                ).toFixed(2),
+              )
+            : null;
 
     let punctualityScore: number | null = null;
     if (deliveredOrders.length > 0) {
       const onTimeRate = onTimeDeliveredOrders.length / deliveredOrders.length;
       const avgDelay =
-        deliveryDelayValues.length > 0
-          ? deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
-            deliveryDelayValues.length
-          : 0;
+          deliveryDelayValues.length > 0
+              ? deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
+                  deliveryDelayValues.length
+              : 0;
 
       const delayPenalty = Math.max(0, avgDelay) / 60;
       punctualityScore = this.clamp(
@@ -498,10 +539,10 @@ export class DashboardService {
       const deliveredPerRideScore = this.clamp(deliveredPerRideBase * 35, 0, 100);
 
       const avgDeliveryDelay =
-        deliveryDelayValues.length > 0
-          ? deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
-            deliveryDelayValues.length
-          : 0;
+          deliveryDelayValues.length > 0
+              ? deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
+                  deliveryDelayValues.length
+              : 0;
 
       const delayComponent = this.clamp(
         100 - Math.max(0, avgDeliveryDelay) / 60,
@@ -527,16 +568,16 @@ export class DashboardService {
 
       const recommended = [...plan].sort(
         (a, b) =>
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
       );
 
       const actual = [...plan]
-        .filter((o) => o.actualDeliveryTime)
-        .sort(
-          (a, b) =>
-            new Date(a.actualDeliveryTime!).getTime() -
-            new Date(b.actualDeliveryTime!).getTime(),
-        );
+          .filter((o) => o.actualDeliveryTime)
+          .sort(
+            (a, b) =>
+                new Date(a.actualDeliveryTime!).getTime() -
+                new Date(b.actualDeliveryTime!).getTime(),
+          );
 
       if (actual.length < 2) continue;
 
@@ -562,9 +603,10 @@ export class DashboardService {
       );
 
       const avgSequenceScore =
-        sequenceScores.length > 0
-          ? sequenceScores.reduce((sum, v) => sum + v, 0) / sequenceScores.length
-          : null;
+          sequenceScores.length > 0
+              ? sequenceScores.reduce((sum, v) => sum + v, 0) /
+                  sequenceScores.length
+              : null;
 
       multiOrderScore = Number(
         (
@@ -583,23 +625,24 @@ export class DashboardService {
     };
 
     const totalWeight =
-      weights.driving +
-      weights.punctuality +
-      weights.deliveryEfficiency +
-      weights.multiOrder;
+        weights.driving +
+        weights.punctuality +
+        weights.deliveryEfficiency +
+        weights.multiOrder;
 
     const overallScore =
-      totalWeight > 0
-        ? Number(
-            (
-              ((drivingScore ?? 0) * weights.driving +
-                (punctualityScore ?? 0) * weights.punctuality +
-                (deliveryEfficiencyScore ?? 0) * weights.deliveryEfficiency +
-                (multiOrderScore ?? 0) * weights.multiOrder) /
-              totalWeight
-            ).toFixed(2),
-          )
-        : null;
+        totalWeight > 0
+            ? Number(
+                (
+                  ((drivingScore ?? 0) * weights.driving +
+                          (punctualityScore ?? 0) * weights.punctuality +
+                          (deliveryEfficiencyScore ?? 0) *
+                              weights.deliveryEfficiency +
+                          (multiOrderScore ?? 0) * weights.multiOrder) /
+                      totalWeight
+                ).toFixed(2),
+              )
+            : null;
 
     return {
       courier,
@@ -609,44 +652,44 @@ export class DashboardService {
         totalDeliveredOrders: deliveredOrders.length,
         onTimeDeliveredOrders: onTimeDeliveredOrders.length,
         onTimeDeliveryRate:
-          deliveredOrders.length > 0
-            ? Number(
-                (
-                  (onTimeDeliveredOrders.length / deliveredOrders.length) *
-                  100
-                ).toFixed(2),
-              )
-            : null,
+            deliveredOrders.length > 0
+                ? Number(
+                    (
+                      (onTimeDeliveredOrders.length / deliveredOrders.length) *
+                      100
+                    ).toFixed(2),
+                  )
+                : null,
         averageRideScore: drivingScore,
         averageDeliveryDelaySeconds:
-          deliveryDelayValues.length > 0
-            ? Math.round(
-                deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
-                  deliveryDelayValues.length,
-              )
-            : null,
+            deliveryDelayValues.length > 0
+                ? Math.round(
+                    deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
+                        deliveryDelayValues.length,
+                  )
+                : null,
         deliveredOrdersPerRide:
-          rides.length > 0
-            ? Number((deliveredOrders.length / rides.length).toFixed(2))
-            : null,
+            rides.length > 0
+                ? Number((deliveredOrders.length / rides.length).toFixed(2))
+                : null,
         multiOrderRideCount,
         multiOrderRate:
-          rides.length > 0
-            ? Number((multiOrderRate * 100).toFixed(2))
-            : null,
+            rides.length > 0
+                ? Number((multiOrderRate * 100).toFixed(2))
+                : null,
         averageOrdersPerRide:
-          rides.length > 0
-            ? Number(averageOrdersPerRide.toFixed(2))
-            : null,
+            rides.length > 0
+                ? Number(averageOrdersPerRide.toFixed(2))
+                : null,
         averageSequenceAccuracy:
-          sequenceScores.length > 0
-            ? Number(
-                (
-                  sequenceScores.reduce((sum, v) => sum + v, 0) /
-                  sequenceScores.length
-                ).toFixed(2),
-              )
-            : null,
+            sequenceScores.length > 0
+                ? Number(
+                    (
+                      sequenceScores.reduce((sum, v) => sum + v, 0) /
+                      sequenceScores.length
+                    ).toFixed(2),
+                  )
+                : null,
       },
       score: {
         drivingScore,
@@ -684,14 +727,14 @@ export class DashboardService {
     );
 
     const onTimePickup =
-      order.actualPickupTime && order.estimatedPickupTime
-        ? pickupDelaySeconds !== null && pickupDelaySeconds <= 0
-        : null;
+        order.actualPickupTime && order.estimatedPickupTime
+            ? pickupDelaySeconds !== null && pickupDelaySeconds <= 0
+            : null;
 
     const onTimeDelivery =
-      order.actualDeliveryTime && order.estimatedDeliveryTime
-        ? deliveryDelaySeconds !== null && deliveryDelaySeconds <= 0
-        : null;
+        order.actualDeliveryTime && order.estimatedDeliveryTime
+            ? deliveryDelaySeconds !== null && deliveryDelaySeconds <= 0
+            : null;
 
     const pickupEtaStatus = this.getEtaStatus(
       order.estimatedPickupTime,

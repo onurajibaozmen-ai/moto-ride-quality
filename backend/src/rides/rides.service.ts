@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { RideStatus } from '@prisma/client';
+import { Prisma, RideStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RideAnalyticsService } from '../analytics/ride-analytics.service';
 import { RideScoringService } from '../scoring/ride-scoring.service';
@@ -17,6 +17,10 @@ export class RidesService {
   ) {}
 
   async startRide(userId: string) {
+    if (!userId) {
+      throw new Error('startRide called without userId');
+    }
+
     const activeRide = await this.prisma.ride.findFirst({
       where: {
         userId,
@@ -140,34 +144,100 @@ export class RidesService {
     };
   }
 
-  async endRide(id: string, userId: string) {
-    const ride = await this.prisma.ride.findFirst({
-      where: {
-        id,
-        userId,
-      },
-    });
+  async endRide(userId: string, rideId: string) {
+    if (!userId) {
+      throw new Error('endRide called without userId');
+    }
+
+    let ride: Prisma.RideGetPayload<object> | null = null;
+
+    if (rideId) {
+      ride = await this.prisma.ride.findFirst({
+        where: {
+          id: rideId,
+          userId,
+          status: RideStatus.ACTIVE,
+        },
+      });
+    }
 
     if (!ride) {
-      throw new NotFoundException('Ride not found');
+      ride = await this.prisma.ride.findFirst({
+        where: {
+          userId,
+          status: RideStatus.ACTIVE,
+        },
+        orderBy: {
+          startedAt: 'desc',
+        },
+      });
     }
 
-    if (ride.status !== RideStatus.ACTIVE) {
-      throw new BadRequestException('Ride is not active');
+    if (!ride) {
+      throw new NotFoundException('Active ride not found for this user');
     }
 
-    await this.prisma.ride.update({
-      where: { id },
+    const endedAt = new Date();
+    const durationS = Math.max(
+      0,
+      Math.round(
+        (endedAt.getTime() - new Date(ride.startedAt).getTime()) / 1000,
+      ),
+    );
+
+    const telemetryPoints = await this.prisma.telemetryPoint.findMany({
+      where: { rideId: ride.id },
+      orderBy: { ts: 'asc' },
+    });
+
+    let totalDistanceM = 0;
+
+    for (let i = 1; i < telemetryPoints.length; i++) {
+      const prev = telemetryPoints[i - 1];
+      const curr = telemetryPoints[i];
+
+      totalDistanceM += this.calculateDistanceMeters(
+        prev.lat,
+        prev.lng,
+        curr.lat,
+        curr.lng,
+      );
+    }
+
+    const updatedRide = await this.prisma.ride.update({
+      where: { id: ride.id },
       data: {
-        endedAt: new Date(),
         status: RideStatus.COMPLETED,
+        endedAt,
+        durationS,
+        totalDistanceM,
       },
     });
 
-    await this.rideAnalyticsService.recomputeRideAnalytics(id);
-    await this.rideScoringService.recomputeRideScore(id);
+    return updatedRide;
+  }
 
-    return this.getRideDetail(id, userId);
+  private calculateDistanceMeters(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ): number {
+    const toRad = (value: number) => (value * Math.PI) / 180;
+    const earthRadiusM = 6371000;
+
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadiusM * c;
   }
 
   private buildRideInsights(ride: {
