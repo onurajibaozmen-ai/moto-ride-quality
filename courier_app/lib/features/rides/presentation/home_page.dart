@@ -8,6 +8,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geolocator_android/geolocator_android.dart';
 import 'package:geolocator_apple/geolocator_apple.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import 'widgets/ride_mini_map.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/auth/auth_manager.dart';
 import '../../auth/presentation/login_page.dart';
@@ -768,6 +770,44 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _openNavigationToNextStop() async {
+    final stop = _nextActionableStop;
+    if (stop == null) {
+      _showMessage('No next stop available');
+      return;
+    }
+
+    final lat = (stop['lat'] as num?)?.toDouble();
+    final lng = (stop['lng'] as num?)?.toDouble();
+
+    if (lat == null || lng == null) {
+      _showMessage('Invalid stop coordinates');
+      return;
+    }
+
+    final googleMapsUrl =
+        Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving');
+
+    final appleMapsUrl =
+        Uri.parse('http://maps.apple.com/?daddr=$lat,$lng');
+
+    try {
+      if (await canLaunchUrl(googleMapsUrl)) {
+        await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);
+        return;
+      }
+
+      if (await canLaunchUrl(appleMapsUrl)) {
+        await launchUrl(appleMapsUrl, mode: LaunchMode.externalApplication);
+        return;
+      }
+
+      throw 'No map app available';
+    } catch (e) {
+      _showMessage('Could not open navigation');
+    }
+  }
+
   Future<void> _markPickedUp(String orderId) async {
     setState(() {
       _busyOrderId = orderId;
@@ -1295,6 +1335,83 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
             ),
             const SizedBox(height: 16),
+            Card(
+              elevation: 1,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Route Map',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (!_hasActiveRide)
+                      const Text('Start a ride to see the route map')
+                    else if (recommendedStops.isEmpty)
+                      const Text('No mapped stops available yet')
+                    else
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          RideMiniMap(
+                            courierLat: _lastPosition?.latitude,
+                            courierLng: _lastPosition?.longitude,
+                            stops: recommendedStops,
+                            nextOrderId: _nextActionableOrderId,
+                            nextStopType:
+                                _nextActionableStop?['type']?.toString(),
+                          ),
+
+                          const SizedBox(height: 12),
+
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: (_hasActiveRide && _nextActionableStop != null)
+                                  ? _openNavigationToNextStop
+                                  : null,
+                              icon: const Icon(Icons.navigation),
+                              label: const Text('Navigate to Next Stop'),
+                            ),
+                          ),
+
+                          // button sonrası
+
+                          if (_nextActionableStop != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Text(
+                                'Next: ${_nextActionableStop?['orderRef'] ?? '-'} • ${_formatStopType(_nextActionableStop?['type'] ?? '')}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.blueGrey.shade700,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Red marker = courier • Green = next stop • Blue = pickup • Orange = dropoff',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.blueGrey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            ),
+
+
             Card(
               elevation: 1,
               shape: RoundedRectangleBorder(
