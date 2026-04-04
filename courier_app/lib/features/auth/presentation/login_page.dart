@@ -47,7 +47,12 @@ class _LoginPageState extends State<LoginPage> {
         throw Exception('Login response does not contain token');
       }
 
-      await AuthManager.instance.setToken(token);
+      await AuthManager.instance.setToken(
+        token,
+        user: response['user'] is Map
+          ? Map<String, dynamic>.from(response['user'])
+          : null,
+      );
 
       if (!mounted) return;
 

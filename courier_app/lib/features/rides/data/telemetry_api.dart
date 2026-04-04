@@ -1,38 +1,11 @@
 import 'package:dio/dio.dart';
-import '../../../core/constants/api_constants.dart';
+import 'package:courier_app/core/network/api_client.dart';
 
 class TelemetryApi {
-  final Dio _dio = Dio(
-    BaseOptions(
-      baseUrl: ApiConstants.baseUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 10),
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    ),
-  );
+  final Dio _dio = ApiClient.dio;
 
-  Future<Map<String, dynamic>> sendBatch({
-    required String token,
-    required String rideId,
-    required List<Map<String, dynamic>> points,
-  }) async {
-    final response = await _dio.post(
-      '/telemetry/batch',
-      data: {
-        'rideId': rideId,
-        'deviceTime': DateTime.now().toUtc().toIso8601String(),
-        'points': points,
-      },
-      options: Options(
-        headers: {
-          'Authorization': 'Bearer $token',
-        },
-      ),
-    );
-
-    final data = response.data;
+  Map<String, dynamic>? _safeMap(dynamic data) {
+    if (data == null) return null;
 
     if (data is Map<String, dynamic>) {
       return data;
@@ -42,6 +15,31 @@ class TelemetryApi {
       return Map<String, dynamic>.from(data);
     }
 
-    throw Exception('Invalid telemetry response');
+    return null;
+  }
+
+  Future<Map<String, dynamic>> sendBatch({
+    required String token,
+    required String rideId,
+    required String clientBatchId,
+    required List<Map<String, dynamic>> points,
+  }) async {
+    final response = await _dio.post(
+      '/telemetry/batch',
+      data: {
+        'rideId': rideId,
+        'clientBatchId': clientBatchId,
+        'points': points,
+      },
+    );
+
+    final data = _safeMap(response.data);
+    if (data == null) {
+      throw Exception(
+        'sendBatch response is not a JSON object: ${response.data}',
+      );
+    }
+
+    return data;
   }
 }
