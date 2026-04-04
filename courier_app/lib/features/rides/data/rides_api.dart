@@ -1,6 +1,5 @@
 import 'package:dio/dio.dart';
-
-import '../../../core/network/api_client.dart';
+import 'package:courier_app/core/network/api_client.dart';
 
 class RidesApi {
   final Dio _dio = ApiClient.dio;
@@ -21,11 +20,7 @@ class RidesApi {
 
   Future<Map<String, dynamic>?> getActiveRide(String token) async {
     try {
-      final response = await _dio.get(
-        '/rides/active',
-        options: ApiClient.authOptions(token),
-      );
-
+      final response = await _dio.get('/rides/active');
       return _safeMap(response.data);
     } on DioException catch (e) {
       if (e.type == DioExceptionType.connectionTimeout ||
@@ -40,10 +35,7 @@ class RidesApi {
   }
 
   Future<Map<String, dynamic>> startRide(String token) async {
-    final response = await _dio.post(
-      '/rides/start',
-      options: ApiClient.authOptions(token),
-    );
+    final response = await _dio.post('/rides/start');
 
     final data = _safeMap(response.data);
     if (data == null) {
@@ -55,10 +47,7 @@ class RidesApi {
 
   Future<Map<String, dynamic>> endRide(String token, String rideId) async {
     try {
-      final response = await _dio.post(
-        '/rides/$rideId/end',
-        options: ApiClient.authOptions(token),
-      );
+      final response = await _dio.post('/rides/$rideId/end');
 
       final data = _safeMap(response.data);
       if (data == null) {
@@ -74,10 +63,7 @@ class RidesApi {
   }
 
   Future<Map<String, dynamic>> getRideDetail(String token, String rideId) async {
-    final response = await _dio.get(
-      '/rides/$rideId/detail',
-      options: ApiClient.authOptions(token),
-    );
+    final response = await _dio.get('/rides/$rideId/detail');
 
     final data = _safeMap(response.data);
     if (data == null) {

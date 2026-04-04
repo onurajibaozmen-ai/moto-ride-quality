@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import '../../../core/storage/token_storage.dart';
-import '../data/auth_api.dart';
+
+import '../../../core/auth/auth_manager.dart';
 import '../../rides/presentation/home_page.dart';
+import '../data/auth_api.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -13,9 +14,7 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _phoneController = TextEditingController(text: '5551112233');
   final _passwordController = TextEditingController(text: '1234');
-
   final _authApi = AuthApi();
-  final _tokenStorage = TokenStorage();
 
   bool _isLoading = false;
   String? _errorText;
@@ -34,24 +33,31 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
-      final result = await _authApi.login(
+      final response = await _authApi.login(
         phone: _phoneController.text.trim(),
         password: _passwordController.text.trim(),
       );
 
-      final accessToken = result['accessToken'] as String?;
-      if (accessToken == null || accessToken.isEmpty) {
-        throw Exception('Access token not found');
+      final dynamic rawToken =
+          response['token'] ?? response['accessToken'] ?? response['jwt'];
+
+      final token = rawToken?.toString();
+
+      if (token == null || token.isEmpty) {
+        throw Exception('Login response does not contain token');
       }
 
-      await _tokenStorage.saveToken(accessToken);
+      await AuthManager.instance.setToken(token);
 
       if (!mounted) return;
 
-      Navigator.of(context).pushReplacement(
+      Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const HomePage()),
+        (_) => false,
       );
     } catch (e) {
+      if (!mounted) return;
+
       setState(() {
         _errorText = e.toString();
       });
@@ -73,45 +79,44 @@ class _LoginPageState extends State<LoginPage> {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
-          child: Card(
-            margin: const EdgeInsets.all(16),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: _phoneController,
-                    keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Phone',
-                    ),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: _phoneController,
+                  decoration: const InputDecoration(
+                    labelText: 'Phone',
+                    border: OutlineInputBorder(),
                   ),
+                  keyboardType: TextInputType.phone,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _passwordController,
+                  decoration: const InputDecoration(
+                    labelText: 'Password',
+                    border: OutlineInputBorder(),
+                  ),
+                  obscureText: true,
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _login,
+                    child: Text(_isLoading ? 'Logging in...' : 'Login'),
+                  ),
+                ),
+                if (_errorText != null) ...[
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _passwordController,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Password',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  if (_errorText != null) ...[
-                    Text(
-                      _errorText!,
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _login,
-                      child: Text(_isLoading ? 'Loading...' : 'Login'),
-                    ),
+                  Text(
+                    _errorText!,
+                    style: const TextStyle(color: Colors.red),
                   ),
                 ],
-              ),
+              ],
             ),
           ),
         ),
