@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { OrderStatus, Prisma } from '@prisma/client';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { OrderStatus, Prisma, RideStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateOrderDto } from './dto/create-order.dto';
-import { AssignOrderDto } from './dto/assign-order.dto';
 
-type ListOrdersFilters = {
+type ListOrdersParams = {
   status?: string;
   courierId?: string;
   rideId?: string;
@@ -16,63 +18,56 @@ type ListOrdersFilters = {
 export class OrdersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async createOrder(dto: CreateOrderDto) {
-    const order = await this.prisma.order.create({
+  async createOrder(data: {
+    externalRef?: string;
+    pickupLat: number;
+    pickupLng: number;
+    dropoffLat: number;
+    dropoffLng: number;
+    estimatedPickupTime?: string;
+    estimatedDeliveryTime?: string;
+    notes?: string;
+  }) {
+    return this.prisma.order.create({
       data: {
-        externalRef: dto.externalRef,
-        pickupLat: dto.pickupLat,
-        pickupLng: dto.pickupLng,
-        dropoffLat: dto.dropoffLat,
-        dropoffLng: dto.dropoffLng,
-        estimatedPickupTime: dto.estimatedPickupTime
-          ? new Date(dto.estimatedPickupTime)
-          : undefined,
-        estimatedDeliveryTime: dto.estimatedDeliveryTime
-          ? new Date(dto.estimatedDeliveryTime)
-          : undefined,
-        notes: dto.notes,
+        externalRef: data.externalRef ?? null,
+        pickupLat: data.pickupLat,
+        pickupLng: data.pickupLng,
+        dropoffLat: data.dropoffLat,
+        dropoffLng: data.dropoffLng,
+        estimatedPickupTime: data.estimatedPickupTime
+          ? new Date(data.estimatedPickupTime)
+          : null,
+        estimatedDeliveryTime: data.estimatedDeliveryTime
+          ? new Date(data.estimatedDeliveryTime)
+          : null,
+        notes: data.notes ?? null,
         status: OrderStatus.PENDING,
       },
       include: {
-        courier: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        ride: {
-          select: {
-            id: true,
-            status: true,
-            startedAt: true,
-            endedAt: true,
-            score: true,
-          },
-        },
+        courier: true,
+        ride: true,
       },
     });
-
-    return this.enrichOrder(order);
   }
 
-  async listOrders(filters: ListOrdersFilters) {
-    const page = Math.max(1, filters.page ?? 1);
-    const limit = Math.min(100, Math.max(1, filters.limit ?? 20));
+  async listOrders(params: ListOrdersParams) {
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(100, Math.max(1, params.limit ?? 20));
     const skip = (page - 1) * limit;
 
     const where: Prisma.OrderWhereInput = {};
 
-    if (filters.status) {
-      where.status = filters.status as OrderStatus;
+    if (params.status) {
+      where.status = params.status as OrderStatus;
     }
 
-    if (filters.courierId) {
-      where.assignedCourierId = filters.courierId;
+    if (params.courierId) {
+      where.assignedCourierId = params.courierId;
     }
 
-    if (filters.rideId) {
-      where.rideId = filters.rideId;
+    if (params.rideId) {
+      where.rideId = params.rideId;
     }
 
     const [total, items] = await Promise.all([
@@ -80,22 +75,8 @@ export class OrdersService {
       this.prisma.order.findMany({
         where,
         include: {
-          courier: {
-            select: {
-              id: true,
-              name: true,
-              phone: true,
-            },
-          },
-          ride: {
-            select: {
-              id: true,
-              status: true,
-              startedAt: true,
-              endedAt: true,
-              score: true,
-            },
-          },
+          courier: true,
+          ride: true,
         },
         orderBy: {
           createdAt: 'desc',
@@ -109,7 +90,7 @@ export class OrdersService {
       page,
       limit,
       total,
-      items: items.map((item) => this.enrichOrder(item)),
+      items,
     };
   }
 
@@ -117,22 +98,8 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({
       where: { id },
       include: {
-        courier: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        ride: {
-          select: {
-            id: true,
-            status: true,
-            startedAt: true,
-            endedAt: true,
-            score: true,
-          },
-        },
+        courier: true,
+        ride: true,
       },
     });
 
@@ -140,28 +107,16 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    return this.enrichOrder(order);
+    return order;
   }
 
-  async assignOrder(orderId: string, dto: AssignOrderDto) {
-    const courier = await this.prisma.user.findUnique({
-      where: { id: dto.courierId },
-    });
-
-    if (!courier) {
-      throw new NotFoundException('Courier not found');
-    }
-
-    if (dto.rideId) {
-      const ride = await this.prisma.ride.findUnique({
-        where: { id: dto.rideId },
-      });
-
-      if (!ride) {
-        throw new NotFoundException('Ride not found');
-      }
-    }
-
+  async assignOrder(
+    orderId: string,
+    payload: {
+      courierId: string;
+      rideId?: string;
+    },
+  ) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
@@ -170,35 +125,44 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    const updated = await this.prisma.order.update({
+    const courier = await this.prisma.user.findFirst({
+      where: {
+        id: payload.courierId,
+        role: UserRole.COURIER,
+      },
+    });
+
+    if (!courier) {
+      throw new NotFoundException('Courier not found');
+    }
+
+    let rideId: string | null = null;
+
+    if (payload.rideId) {
+      const ride = await this.prisma.ride.findUnique({
+        where: { id: payload.rideId },
+      });
+
+      if (!ride) {
+        throw new NotFoundException('Ride not found');
+      }
+
+      rideId = ride.id;
+    }
+
+    return this.prisma.order.update({
       where: { id: orderId },
       data: {
-        assignedCourierId: dto.courierId,
-        rideId: dto.rideId,
+        assignedCourierId: payload.courierId,
+        rideId,
         assignedAt: new Date(),
         status: OrderStatus.ASSIGNED,
       },
       include: {
-        courier: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        ride: {
-          select: {
-            id: true,
-            status: true,
-            startedAt: true,
-            endedAt: true,
-            score: true,
-          },
-        },
+        courier: true,
+        ride: true,
       },
     });
-
-    return this.enrichOrder(updated);
   }
 
   async markPickedUp(orderId: string) {
@@ -210,7 +174,11 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    const updated = await this.prisma.order.update({
+    if (order.status !== OrderStatus.ASSIGNED) {
+      throw new BadRequestException('Order must be ASSIGNED before pickup');
+    }
+
+    return this.prisma.order.update({
       where: { id: orderId },
       data: {
         status: OrderStatus.PICKED_UP,
@@ -218,26 +186,10 @@ export class OrdersService {
         actualPickupTime: new Date(),
       },
       include: {
-        courier: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        ride: {
-          select: {
-            id: true,
-            status: true,
-            startedAt: true,
-            endedAt: true,
-            score: true,
-          },
-        },
+        courier: true,
+        ride: true,
       },
     });
-
-    return this.enrichOrder(updated);
   }
 
   async markDelivered(orderId: string) {
@@ -249,7 +201,11 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    const updated = await this.prisma.order.update({
+    if (order.status !== OrderStatus.PICKED_UP) {
+      throw new BadRequestException('Order must be PICKED_UP before delivery');
+    }
+
+    return this.prisma.order.update({
       where: { id: orderId },
       data: {
         status: OrderStatus.DELIVERED,
@@ -257,66 +213,13 @@ export class OrdersService {
         actualDeliveryTime: new Date(),
       },
       include: {
-        courier: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        ride: {
-          select: {
-            id: true,
-            status: true,
-            startedAt: true,
-            endedAt: true,
-            score: true,
-          },
-        },
+        courier: true,
+        ride: true,
       },
     });
-
-    return this.enrichOrder(updated);
   }
 
-  async cancelOrder(orderId: string) {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-    });
-
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    const updated = await this.prisma.order.update({
-      where: { id: orderId },
-      data: {
-        status: OrderStatus.CANCELLED,
-      },
-      include: {
-        courier: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        ride: {
-          select: {
-            id: true,
-            status: true,
-            startedAt: true,
-            endedAt: true,
-            score: true,
-          },
-        },
-      },
-    });
-
-    return this.enrichOrder(updated);
-  }
-
-  async getRideOrdersPlan(rideId: string) {
+  async getRidePlan(rideId: string) {
     const ride = await this.prisma.ride.findUnique({
       where: { id: rideId },
       include: {
@@ -333,37 +236,67 @@ export class OrdersService {
       throw new NotFoundException('Ride not found');
     }
 
-    const orders = ride.orders.map((o) => this.enrichOrder(o));
-    const stops = this.buildStopsForOrders(orders);
-    const recommendedSequence = this.buildRecommendedSequence(stops);
+    const recommendedSequence = ride.orders.flatMap((order, index) => [
+      {
+        stopId: `${order.id}_pickup`,
+        orderId: order.id,
+        orderRef: order.externalRef ?? order.id,
+        type: 'pickup',
+        lat: order.pickupLat,
+        lng: order.pickupLng,
+        status: order.status,
+        sequence: index * 2 + 1,
+      },
+      {
+        stopId: `${order.id}_dropoff`,
+        orderId: order.id,
+        orderRef: order.externalRef ?? order.id,
+        type: 'dropoff',
+        lat: order.dropoffLat,
+        lng: order.dropoffLng,
+        status: order.status,
+        sequence: index * 2 + 2,
+      },
+    ]);
 
-    const actualStops = stops
-      .map((stop) => {
-        const order = orders.find((o) => o.id === stop.orderId);
-
-        let actualTs: Date | null = null;
-
-        if (stop.type === 'pickup') {
-          actualTs = order?.actualPickupTime ?? null;
-        } else {
-          actualTs = order?.actualDeliveryTime ?? null;
-        }
-
-        return {
-          ...stop,
-          actualTs,
-        };
-      })
-      .filter((s) => s.actualTs !== null)
-      .sort(
-        (a, b) =>
-          new Date(a.actualTs as Date).getTime() -
-          new Date(b.actualTs as Date).getTime(),
-      )
-      .map((s, index) => ({
-        sequence: index + 1,
-        ...s,
-      }));
+    const actualSequence = [
+      ...ride.orders
+        .filter((o) => o.actualPickupTime)
+        .sort(
+          (a, b) =>
+            new Date(a.actualPickupTime!).getTime() -
+            new Date(b.actualPickupTime!).getTime(),
+        )
+        .map((order, index) => ({
+          stopId: `${order.id}_pickup`,
+          orderId: order.id,
+          orderRef: order.externalRef ?? order.id,
+          type: 'pickup',
+          lat: order.pickupLat,
+          lng: order.pickupLng,
+          status: order.status,
+          sequence: index + 1,
+          actualTs: order.actualPickupTime,
+        })),
+      ...ride.orders
+        .filter((o) => o.actualDeliveryTime)
+        .sort(
+          (a, b) =>
+            new Date(a.actualDeliveryTime!).getTime() -
+            new Date(b.actualDeliveryTime!).getTime(),
+        )
+        .map((order, index) => ({
+          stopId: `${order.id}_dropoff`,
+          orderId: order.id,
+          orderRef: order.externalRef ?? order.id,
+          type: 'dropoff',
+          lat: order.dropoffLat,
+          lng: order.dropoffLng,
+          status: order.status,
+          sequence: index + 1,
+          actualTs: order.actualDeliveryTime,
+        })),
+    ];
 
     return {
       ride: {
@@ -373,180 +306,298 @@ export class OrdersService {
         endedAt: ride.endedAt,
         score: ride.score,
       },
-      courier: ride.user,
-      totalOrders: orders.length,
-      orders,
-      stops,
+      courier: ride.user
+        ? {
+            id: ride.user.id,
+            name: ride.user.name,
+            phone: ride.user.phone,
+          }
+        : null,
+      totalOrders: ride.orders.length,
+      orders: ride.orders.map((order) => ({
+        id: order.id,
+        externalRef: order.externalRef,
+        status: order.status,
+        actualPickupTime: order.actualPickupTime,
+        actualDeliveryTime: order.actualDeliveryTime,
+        estimatedPickupTime: order.estimatedPickupTime,
+        estimatedDeliveryTime: order.estimatedDeliveryTime,
+        metrics: {
+          pickupDelaySeconds: this.getDelaySeconds(
+            order.estimatedPickupTime,
+            order.actualPickupTime,
+          ),
+          deliveryDelaySeconds: this.getDelaySeconds(
+            order.estimatedDeliveryTime,
+            order.actualDeliveryTime,
+          ),
+          pickupEtaStatus: this.getEtaStatus(
+            order.estimatedPickupTime,
+            order.actualPickupTime,
+          ),
+          deliveryEtaStatus: this.getEtaStatus(
+            order.estimatedDeliveryTime,
+            order.actualDeliveryTime,
+          ),
+        },
+      })),
+      stops: recommendedSequence,
       recommendedSequence,
-      actualSequence: actualStops,
+      actualSequence,
     };
   }
 
-  private buildStopsForOrders(
-    orders: Array<ReturnType<OrdersService['enrichOrder']>>,
-  ) {
-    const stops = orders.flatMap((order) => [
-      {
-        stopId: `${order.id}-pickup`,
-        orderId: order.id,
-        orderRef: order.externalRef ?? order.id,
-        type: 'pickup' as const,
-        lat: order.pickupLat,
-        lng: order.pickupLng,
-        status: order.status,
-      },
-      {
-        stopId: `${order.id}-dropoff`,
-        orderId: order.id,
-        orderRef: order.externalRef ?? order.id,
-        type: 'dropoff' as const,
-        lat: order.dropoffLat,
-        lng: order.dropoffLng,
-        status: order.status,
-      },
-    ]);
+  async recommendCourier(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+    });
 
-    return stops;
-  }
-
-  private buildRecommendedSequence(
-    stops: Array<{
-      stopId: string;
-      orderId: string;
-      orderRef: string;
-      type: 'pickup' | 'dropoff';
-      lat: number;
-      lng: number;
-      status: string;
-    }>,
-  ) {
-    if (stops.length === 0) {
-      return [];
+    if (!order) {
+      throw new NotFoundException('Order not found');
     }
 
-    const remaining = [...stops];
-    const ordered: typeof remaining = [];
+    const couriers = await this.prisma.user.findMany({
+      where: {
+        role: UserRole.COURIER,
+      },
+      include: {
+        rides: {
+          where: {
+            status: RideStatus.ACTIVE,
+          },
+          orderBy: {
+            startedAt: 'desc',
+          },
+          take: 1,
+          include: {
+            orders: true,
+          },
+        },
+      },
+    });
 
-    let current = remaining.shift()!;
-    ordered.push(current);
+    const now = Date.now();
 
-    while (remaining.length > 0) {
-      let nearestIndex = 0;
-      let nearestDistance = Number.POSITIVE_INFINITY;
+    const candidates = couriers.map((courier) => {
+      const activeRide = courier.rides[0] ?? null;
+      const online =
+        !!courier.lastSeenAt &&
+        now - new Date(courier.lastSeenAt).getTime() <= 5 * 60 * 1000;
 
-      for (let i = 0; i < remaining.length; i++) {
-        const candidate = remaining[i];
-        const distance = this.haversineMeters(
-          current.lat,
-          current.lng,
-          candidate.lat,
-          candidate.lng,
+      // Geçici placeholder courier position
+      const courierLat = 41.0082;
+      const courierLng = 28.9784;
+
+      const pickupDistanceM = this.calculateDistanceMeters(
+        courierLat,
+        courierLng,
+        order.pickupLat,
+        order.pickupLng,
+      );
+
+      const distanceScore = Math.max(0, 100 - pickupDistanceM / 100);
+      const onlineScore = online ? 30 : 0;
+      const activeRidePenalty = activeRide ? 20 : 0;
+      const activeRideOrderPenalty = activeRide
+        ? activeRide.orders.length * 5
+        : 0;
+
+      const totalScore = Number(
+        (
+          distanceScore +
+          onlineScore -
+          activeRidePenalty -
+          activeRideOrderPenalty
+        ).toFixed(2),
+      );
+
+      return {
+        courier: {
+          id: courier.id,
+          name: courier.name,
+          phone: courier.phone,
+          lastSeenAt: courier.lastSeenAt,
+        },
+        online,
+        activeRide: activeRide
+          ? {
+              id: activeRide.id,
+              status: activeRide.status,
+              orderCount: activeRide.orders.length,
+            }
+          : null,
+        metrics: {
+          pickupDistanceM: Number(pickupDistanceM.toFixed(2)),
+          distanceScore: Number(distanceScore.toFixed(2)),
+          onlineScore,
+          activeRidePenalty,
+          activeRideOrderPenalty,
+        },
+        recommendationScore: totalScore,
+      };
+    });
+
+    candidates.sort((a, b) => b.recommendationScore - a.recommendationScore);
+
+    return {
+      order: {
+        id: order.id,
+        externalRef: order.externalRef,
+        status: order.status,
+        pickupLat: order.pickupLat,
+        pickupLng: order.pickupLng,
+        dropoffLat: order.dropoffLat,
+        dropoffLng: order.dropoffLng,
+      },
+      recommendedCourier: candidates[0] ?? null,
+      candidates,
+    };
+  }
+
+  async autoAssignOrder(orderId: string) {
+    const recommendation = await this.recommendCourier(orderId);
+
+    if (!recommendation.recommendedCourier) {
+      throw new NotFoundException('No suitable courier found');
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const courierId = recommendation.recommendedCourier.courier.id;
+    const activeRideId = recommendation.recommendedCourier.activeRide?.id;
+
+    return this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        assignedCourierId: courierId,
+        rideId: activeRideId ?? null,
+        assignedAt: new Date(),
+        status: OrderStatus.ASSIGNED,
+      },
+      include: {
+        courier: true,
+        ride: true,
+      },
+    });
+  }
+
+  async suggestBatchCandidates(orderId: string) {
+    const baseOrder = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        courier: true,
+        ride: true,
+      },
+    });
+
+    if (!baseOrder) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const nearbyPendingOrders = await this.prisma.order.findMany({
+      where: {
+        id: { not: orderId },
+        status: OrderStatus.PENDING,
+      },
+      include: {
+        courier: true,
+        ride: true,
+      },
+      take: 50,
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    const suggestions = nearbyPendingOrders
+      .map((candidate) => {
+        const pickupDistanceM = this.calculateDistanceMeters(
+          baseOrder.pickupLat,
+          baseOrder.pickupLng,
+          candidate.pickupLat,
+          candidate.pickupLng,
         );
 
-        if (distance < nearestDistance) {
-          nearestDistance = distance;
-          nearestIndex = i;
-        }
-      }
+        const dropoffDistanceM = this.calculateDistanceMeters(
+          baseOrder.dropoffLat,
+          baseOrder.dropoffLng,
+          candidate.dropoffLat,
+          candidate.dropoffLng,
+        );
 
-      current = remaining.splice(nearestIndex, 1)[0];
-      ordered.push(current);
-    }
+        const averageDistanceM = (pickupDistanceM + dropoffDistanceM) / 2;
+        const batchScore = Math.max(0, 100 - averageDistanceM / 100);
 
-    return ordered.map((stop, index) => ({
-      sequence: index + 1,
-      ...stop,
-    }));
+        return {
+          order: {
+            id: candidate.id,
+            externalRef: candidate.externalRef,
+            status: candidate.status,
+            pickupLat: candidate.pickupLat,
+            pickupLng: candidate.pickupLng,
+            dropoffLat: candidate.dropoffLat,
+            dropoffLng: candidate.dropoffLng,
+          },
+          metrics: {
+            pickupDistanceM: Number(pickupDistanceM.toFixed(2)),
+            dropoffDistanceM: Number(dropoffDistanceM.toFixed(2)),
+            averageDistanceM: Number(averageDistanceM.toFixed(2)),
+          },
+          batchScore: Number(batchScore.toFixed(2)),
+        };
+      })
+      .filter((item) => item.batchScore > 0)
+      .sort((a, b) => b.batchScore - a.batchScore)
+      .slice(0, 10);
+
+    return {
+      baseOrder: {
+        id: baseOrder.id,
+        externalRef: baseOrder.externalRef,
+        status: baseOrder.status,
+        pickupLat: baseOrder.pickupLat,
+        pickupLng: baseOrder.pickupLng,
+        dropoffLat: baseOrder.dropoffLat,
+        dropoffLng: baseOrder.dropoffLng,
+      },
+      suggestions,
+    };
   }
 
-  private haversineMeters(
+  private calculateDistanceMeters(
     lat1: number,
     lng1: number,
     lat2: number,
     lng2: number,
   ) {
     const toRad = (value: number) => (value * Math.PI) / 180;
-    const R = 6371000;
+    const earthRadiusM = 6371000;
 
     const dLat = toRad(lat2 - lat1);
     const dLng = toRad(lng2 - lng1);
 
     const a =
-      Math.sin(dLat / 2) ** 2 +
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos(toRad(lat1)) *
         Math.cos(toRad(lat2)) *
-        Math.sin(dLng / 2) ** 2;
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
 
-    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
-
-  private enrichOrder<T extends {
-    id: string;
-    externalRef: string | null;
-    pickupLat: number;
-    pickupLng: number;
-    dropoffLat: number;
-    dropoffLng: number;
-    estimatedPickupTime: Date | null;
-    estimatedDeliveryTime: Date | null;
-    actualPickupTime: Date | null;
-    actualDeliveryTime: Date | null;
-    assignedAt: Date | null;
-    pickedUpAt: Date | null;
-    deliveredAt: Date | null;
-    status: string;
-  }>(order: T) {
-    const pickupDelaySeconds = this.getDelaySeconds(
-      order.estimatedPickupTime,
-      order.actualPickupTime,
-    );
-
-    const deliveryDelaySeconds = this.getDelaySeconds(
-      order.estimatedDeliveryTime,
-      order.actualDeliveryTime,
-    );
-
-    const onTimePickup =
-      order.actualPickupTime && order.estimatedPickupTime
-        ? pickupDelaySeconds !== null && pickupDelaySeconds <= 0
-        : null;
-
-    const onTimeDelivery =
-      order.actualDeliveryTime && order.estimatedDeliveryTime
-        ? deliveryDelaySeconds !== null && deliveryDelaySeconds <= 0
-        : null;
-
-    const pickupEtaStatus = this.getEtaStatus(
-      order.estimatedPickupTime,
-      order.actualPickupTime,
-    );
-
-    const deliveryEtaStatus = this.getEtaStatus(
-      order.estimatedDeliveryTime,
-      order.actualDeliveryTime,
-    );
-
-    return {
-      ...order,
-      metrics: {
-        pickupDelaySeconds,
-        deliveryDelaySeconds,
-        onTimePickup,
-        onTimeDelivery,
-        pickupEtaStatus,
-        deliveryEtaStatus,
-      },
-    };
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadiusM * c;
   }
 
   private getDelaySeconds(
     estimated: Date | null,
     actual: Date | null,
   ): number | null {
-    if (!estimated || !actual) {
-      return null;
-    }
-
+    if (!estimated || !actual) return null;
     return Math.round((actual.getTime() - estimated.getTime()) / 1000);
   }
 
@@ -554,30 +605,16 @@ export class OrdersService {
     estimated: Date | null,
     actual: Date | null,
   ): 'pending' | 'on_time' | 'late' | 'early' | 'unknown' {
-    if (!estimated && !actual) {
-      return 'unknown';
-    }
-
-    if (estimated && !actual) {
-      return 'pending';
-    }
-
-    if (!estimated || !actual) {
-      return 'unknown';
-    }
+    if (!estimated && !actual) return 'unknown';
+    if (estimated && !actual) return 'pending';
+    if (!estimated || !actual) return 'unknown';
 
     const diffSeconds = Math.round(
       (actual.getTime() - estimated.getTime()) / 1000,
     );
 
-    if (diffSeconds > 0) {
-      return 'late';
-    }
-
-    if (diffSeconds < 0) {
-      return 'early';
-    }
-
+    if (diffSeconds > 0) return 'late';
+    if (diffSeconds < 0) return 'early';
     return 'on_time';
   }
 }

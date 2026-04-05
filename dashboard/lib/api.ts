@@ -23,3 +23,17 @@ export async function apiFetch<T = any>(
 }
 
 export const fetchJson = apiFetch;
+
+export async function recommendCourier(orderId: string) {
+  return apiFetch(`/orders/${orderId}/recommend-courier`);
+}
+
+export async function autoAssignOrder(orderId: string) {
+  return apiFetch(`/orders/${orderId}/auto-assign`, {
+    method: 'PATCH',
+  });
+}
+
+export async function getBatchSuggestions(orderId: string) {
+  return apiFetch(`/orders/${orderId}/batch-suggestions`);
+}

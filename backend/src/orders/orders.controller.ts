@@ -8,16 +8,26 @@ import {
   Query,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
-import { CreateOrderDto } from './dto/create-order.dto';
-import { AssignOrderDto } from './dto/assign-order.dto';
 
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Post()
-  createOrder(@Body() dto: CreateOrderDto) {
-    return this.ordersService.createOrder(dto);
+  createOrder(
+    @Body()
+    body: {
+      externalRef?: string;
+      pickupLat: number;
+      pickupLng: number;
+      dropoffLat: number;
+      dropoffLng: number;
+      estimatedPickupTime?: string;
+      estimatedDeliveryTime?: string;
+      notes?: string;
+    },
+  ) {
+    return this.ordersService.createOrder(body);
   }
 
   @Get()
@@ -43,8 +53,15 @@ export class OrdersController {
   }
 
   @Patch(':id/assign')
-  assignOrder(@Param('id') id: string, @Body() dto: AssignOrderDto) {
-    return this.ordersService.assignOrder(id, dto);
+  assignOrder(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      courierId: string;
+      rideId?: string;
+    },
+  ) {
+    return this.ordersService.assignOrder(id, body);
   }
 
   @Patch(':id/pickup')
@@ -57,13 +74,23 @@ export class OrdersController {
     return this.ordersService.markDelivered(id);
   }
 
-  @Patch(':id/cancel')
-  cancelOrder(@Param('id') id: string) {
-    return this.ordersService.cancelOrder(id);
+  @Get('ride/:rideId/plan')
+  getRidePlan(@Param('rideId') rideId: string) {
+    return this.ordersService.getRidePlan(rideId);
   }
 
-  @Get('/ride/:rideId/plan')
-  getRideOrdersPlan(@Param('rideId') rideId: string) {
-    return this.ordersService.getRideOrdersPlan(rideId);
+  @Get(':id/recommend-courier')
+  recommendCourier(@Param('id') id: string) {
+    return this.ordersService.recommendCourier(id);
+  }
+
+  @Patch(':id/auto-assign')
+  autoAssignOrder(@Param('id') id: string) {
+    return this.ordersService.autoAssignOrder(id);
+  }
+
+  @Get(':id/batch-suggestions')
+  suggestBatchCandidates(@Param('id') id: string) {
+    return this.ordersService.suggestBatchCandidates(id);
   }
 }
