@@ -18,6 +18,20 @@ enum RideStatus {
   CANCELLED
 }
 
+enum CourierAvailabilityStatus {
+  OFFLINE
+  READY
+  DELIVERY
+}
+
+enum DispatchDecisionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  AUTO_ASSIGNED
+  SKIPPED
+}
+
 enum ScoreConfidenceLevel {
   LOW
   MEDIUM
@@ -33,34 +47,41 @@ enum OrderStatus {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  name         String
-  phone        String   @unique
-  passwordHash String
-  role         UserRole @default(COURIER)
-  isActive     Boolean  @default(true)
-  lastSeenAt   DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                      String                    @id @default(cuid())
+  name                    String
+  phone                   String                    @unique
+  passwordHash            String
+  role                    UserRole                  @default(COURIER)
+  isActive                Boolean                   @default(true)
+  lastSeenAt              DateTime?
+  availabilityStatus      CourierAvailabilityStatus @default(OFFLINE)
+  availabilityUpdatedAt   DateTime?
+  shiftAutoReadyEnabled   Boolean                   @default(false)
+  createdAt               DateTime                  @default(now())
+  updatedAt               DateTime                  @updatedAt
+  dispatchRecommendations DispatchDecisionLog[]     @relation("DispatchRecommendedCourier")
 
-  rides             Ride[]
-  devices           Device[]
-  telemetryBatches  TelemetryBatchIngest[]
-  assignedOrders    Order[] @relation("CourierOrders")
+  rides            Ride[]
+  devices          Device[]
+  telemetryBatches TelemetryBatchIngest[]
+  assignedOrders   Order[]                @relation("CourierOrders")
+
+  @@index([role, isActive])
+  @@index([role, isActive, availabilityStatus])
 }
 
 model Ride {
-  id               String     @id @default(cuid())
-  userId           String
-  startedAt        DateTime
-  endedAt          DateTime?
-  status           RideStatus @default(ACTIVE)
-  totalDistanceM   Float?     @default(0)
-  durationS        Int?       @default(0)
-  score            Float?
-  scoreVersion     String?
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
+  id             String     @id @default(cuid())
+  userId         String
+  startedAt      DateTime
+  endedAt        DateTime?
+  status         RideStatus @default(ACTIVE)
+  totalDistanceM Float?     @default(0)
+  durationS      Int?       @default(0)
+  score          Float?
+  scoreVersion   String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
   user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   telemetryPoints  TelemetryPoint[]
@@ -183,30 +204,31 @@ model TelemetryBatchIngest {
 }
 
 model Order {
-  id                    String      @id @default(cuid())
-  externalRef           String?
-  pickupLat             Float
-  pickupLng             Float
-  dropoffLat            Float
-  dropoffLng            Float
-  status                OrderStatus @default(PENDING)
+  id           String                @id @default(cuid())
+  externalRef  String?
+  pickupLat    Float
+  pickupLng    Float
+  dropoffLat   Float
+  dropoffLng   Float
+  status       OrderStatus           @default(PENDING)
+  dispatchLogs DispatchDecisionLog[]
 
-  assignedCourierId     String?
-  rideId                String?
+  assignedCourierId String?
+  rideId            String?
 
-  assignedAt            DateTime?
-  pickedUpAt            DateTime?
-  deliveredAt           DateTime?
+  assignedAt  DateTime?
+  pickedUpAt  DateTime?
+  deliveredAt DateTime?
 
   estimatedPickupTime   DateTime?
   estimatedDeliveryTime DateTime?
   actualPickupTime      DateTime?
   actualDeliveryTime    DateTime?
 
-  notes                 String?
+  notes String?
 
-  createdAt             DateTime    @default(now())
-  updatedAt             DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   courier User? @relation("CourierOrders", fields: [assignedCourierId], references: [id], onDelete: SetNull)
   ride    Ride? @relation(fields: [rideId], references: [id], onDelete: SetNull)
@@ -214,4 +236,23 @@ model Order {
   @@index([status, createdAt])
   @@index([assignedCourierId, status])
   @@index([rideId])
+}
+
+model DispatchDecisionLog {
+  id                    String                 @id @default(cuid())
+  orderId               String
+  recommendedCourierId  String?
+  status                DispatchDecisionStatus
+  recommendationPayload Json
+  triggerSnapshot       Json?
+  reason                String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  order              Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  recommendedCourier User? @relation("DispatchRecommendedCourier", fields: [recommendedCourierId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@index([recommendedCourierId])
+  @@index([status, createdAt])
 }

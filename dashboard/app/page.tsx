@@ -1,88 +1,132 @@
-import Link from "next/link";
-import { fetchJson } from "@/lib/api";
+import Link from 'next/link';
+import { apiFetch } from '@/lib/api';
 
-type Overview = {
-  totalCouriers: number;
-  activeRides: number;
-  completedRides: number;
-  totalEvents: number;
-  averageScore: number;
-  lowConfidenceRideCount: number;
+type OverviewResponse = {
+  orders?: {
+    total?: number;
+    pending?: number;
+    assigned?: number;
+    pickedUp?: number;
+    delivered?: number;
+  };
+  rides?: {
+    total?: number;
+    active?: number;
+    completed?: number;
+  };
+  couriers?: {
+    total?: number;
+    active?: number;
+    ready?: number;
+    delivery?: number;
+    offline?: number;
+  };
 };
 
-async function getOverview() {
-  return fetchJson<Overview>("/dashboard/overview");
+async function getOverview(): Promise<OverviewResponse> {
+  try {
+    return await apiFetch<OverviewResponse>('/dashboard/overview');
+  } catch (error) {
+    console.error('Failed to fetch overview', error);
+    return {};
+  }
 }
 
 export default async function HomePage() {
   const data = await getOverview();
 
   const cards = [
-    { label: "Total Couriers", value: data.totalCouriers ?? 0 },
-    { label: "Active Rides", value: data.activeRides ?? 0 },
-    { label: "Completed Rides", value: data.completedRides ?? 0 },
-    { label: "Total Events", value: data.totalEvents ?? 0 },
-    { label: "Average Score", value: data.averageScore ?? 0 },
-    { label: "Low Confidence Rides", value: data.lowConfidenceRideCount ?? 0 },
+    { label: 'Total Orders', value: data?.orders?.total ?? 0 },
+    { label: 'Pending Orders', value: data?.orders?.pending ?? 0 },
+    { label: 'Active Rides', value: data?.rides?.active ?? 0 },
+    { label: 'Completed Rides', value: data?.rides?.completed ?? 0 },
+    { label: 'Total Couriers', value: data?.couriers?.total ?? 0 },
+    { label: 'Ready Couriers', value: data?.couriers?.ready ?? 0 },
+    { label: 'Delivery Couriers', value: data?.couriers?.delivery ?? 0 },
+    { label: 'Offline Couriers', value: data?.couriers?.offline ?? 0 },
   ];
 
   return (
-    <main className="p-6">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <main className="min-h-screen bg-slate-50 p-8">
+      <div className="mx-auto max-w-7xl space-y-8">
         <div>
-          <h1 className="text-3xl font-semibold text-slate-900">
-            Ride Quality Dashboard
+          <h1 className="text-3xl font-bold text-slate-900">
+            Delivery Ops Dashboard
           </h1>
-          <p className="mt-2 text-sm text-slate-600">
-            Production overview of courier ride quality metrics.
+          <p className="mt-2 text-slate-600">
+            M15 dispatch workflow hardening görünümü.
           </p>
         </div>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           {cards.map((card) => (
             <div
               key={card.label}
-              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+              className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
             >
               <div className="text-sm text-slate-500">{card.label}</div>
-              <div className="mt-3 text-4xl font-semibold text-slate-900">
+              <div className="mt-2 text-3xl font-semibold text-slate-900">
                 {card.value}
               </div>
             </div>
           ))}
-        </section>
+        </div>
 
-        <section className="grid gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
           <Link
             href="/rides"
-            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:bg-slate-50"
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md"
           >
-            <div className="text-lg font-semibold">Rides</div>
+            <div className="text-lg font-semibold text-slate-900">Rides</div>
             <p className="mt-2 text-sm text-slate-600">
-              Browse completed and active rides.
+              Ride detail ve plan görünümü.
             </p>
           </Link>
 
           <Link
             href="/couriers"
-            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:bg-slate-50"
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md"
           >
-            <div className="text-lg font-semibold">Couriers</div>
+            <div className="text-lg font-semibold text-slate-900">Couriers</div>
             <p className="mt-2 text-sm text-slate-600">
-              See courier performance summaries.
+              Availability ve courier scoring.
             </p>
           </Link>
 
           <Link
-            href="/summary"
-            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:bg-slate-50"
+            href="/orders"
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md"
           >
-            <div className="text-lg font-semibold">Summary</div>
+            <div className="text-lg font-semibold text-slate-900">Orders</div>
             <p className="mt-2 text-sm text-slate-600">
-              View pilot-level aggregate summary.
+              Siparişler ve dispatch panel.
             </p>
           </Link>
-        </section>
+
+          <Link
+            href="/dispatch/queue"
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md"
+          >
+            <div className="text-lg font-semibold text-slate-900">
+              Dispatch Queue
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              15 dk bekleyen sipariş kuyruğu.
+            </p>
+          </Link>
+
+          <Link
+            href="/dispatch/logs"
+            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md"
+          >
+            <div className="text-lg font-semibold text-slate-900">
+              Dispatch Logs
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              Approve / reject / auto-assign geçmişi.
+            </p>
+          </Link>
+        </div>
       </div>
     </main>
   );

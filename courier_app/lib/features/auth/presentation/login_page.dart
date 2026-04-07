@@ -50,7 +50,7 @@ class _LoginPageState extends State<LoginPage> {
       await AuthManager.instance.setToken(
         token,
         user: response['user'] is Map
-          ? Map<String, dynamic>.from(response['user'])
+          ? Map<String, dynamic>.from(2response['user'])
           : null,
       );
 

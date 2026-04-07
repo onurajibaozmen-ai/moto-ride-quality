@@ -1,147 +1,170 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import {
+  CourierAvailabilityStatus,
+  DispatchDecisionStatus,
+  OrderStatus,
+  RideStatus,
+  UserRole,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { OrdersService } from '../orders/orders.service';
 
-type DashboardRideFilters = {
+type DispatchLogsParams = {
   status?: string;
-  userId?: string;
-  from?: string;
-  to?: string;
-  page?: number;
-  limit?: number;
-};
-
-type DashboardOrderFilters = {
-  status?: string;
-  courierId?: string;
-  rideId?: string;
+  orderId?: string;
   page?: number;
   limit?: number;
 };
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ordersService: OrdersService,
+  ) {}
 
   async getOverview() {
-    const [totalCouriers, activeRides, completedRides, avgScoreAgg, totalEvents] =
-      await Promise.all([
-        this.prisma.user.count({
-          where: { role: 'COURIER' },
-        }),
-        this.prisma.ride.count({
-          where: { status: 'ACTIVE' },
-        }),
-        this.prisma.ride.count({
-          where: { status: 'COMPLETED' },
-        }),
-        this.prisma.ride.aggregate({
-          _avg: { score: true },
-          where: {
-            status: 'COMPLETED',
-            score: { not: null },
-          },
-        }),
-        this.prisma.rideEvent.count(),
-      ]);
-
-    return {
-      totalCouriers,
+    const [
+      totalOrders,
+      pendingOrders,
+      assignedOrders,
+      pickedUpOrders,
+      deliveredOrders,
+      totalRides,
       activeRides,
       completedRides,
-      averageScore: avgScoreAgg._avg.score
-        ? Number(avgScoreAgg._avg.score.toFixed(2))
-        : null,
-      totalEvents,
+      totalCouriers,
+      activeCouriers,
+      readyCouriers,
+      deliveryCouriers,
+      offlineCouriers,
+    ] = await Promise.all([
+      this.prisma.order.count(),
+      this.prisma.order.count({ where: { status: OrderStatus.PENDING } }),
+      this.prisma.order.count({ where: { status: OrderStatus.ASSIGNED } }),
+      this.prisma.order.count({ where: { status: OrderStatus.PICKED_UP } }),
+      this.prisma.order.count({ where: { status: OrderStatus.DELIVERED } }),
+      this.prisma.ride.count(),
+      this.prisma.ride.count({ where: { status: RideStatus.ACTIVE } }),
+      this.prisma.ride.count({
+        where: {
+          status: {
+            in: [RideStatus.COMPLETED, RideStatus.CANCELLED],
+          },
+        },
+      }),
+      this.prisma.user.count({
+        where: { role: UserRole.COURIER },
+      }),
+      this.prisma.user.count({
+        where: { role: UserRole.COURIER, isActive: true },
+      }),
+      this.prisma.user.count({
+        where: {
+          role: UserRole.COURIER,
+          isActive: true,
+          availabilityStatus: CourierAvailabilityStatus.READY,
+        },
+      }),
+      this.prisma.user.count({
+        where: {
+          role: UserRole.COURIER,
+          isActive: true,
+          availabilityStatus: CourierAvailabilityStatus.DELIVERY,
+        },
+      }),
+      this.prisma.user.count({
+        where: {
+          role: UserRole.COURIER,
+          availabilityStatus: CourierAvailabilityStatus.OFFLINE,
+        },
+      }),
+    ]);
+
+    return {
+      orders: {
+        total: totalOrders,
+        pending: pendingOrders,
+        assigned: assignedOrders,
+        pickedUp: pickedUpOrders,
+        delivered: deliveredOrders,
+      },
+      rides: {
+        total: totalRides,
+        active: activeRides,
+        completed: completedRides,
+      },
+      couriers: {
+        total: totalCouriers,
+        active: activeCouriers,
+        ready: readyCouriers,
+        delivery: deliveryCouriers,
+        offline: offlineCouriers,
+      },
     };
   }
 
-  async getLeaderboard(limit = 20) {
-    const rides = await this.prisma.ride.findMany({
-      where: {
-        status: 'COMPLETED',
-        score: { not: null },
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        scoreCard: true,
-        analytics: true,
-      },
-      orderBy: [{ score: 'desc' }, { startedAt: 'desc' }],
-      take: limit,
-    });
-
-    return rides.map((ride, index) => ({
-      rank: index + 1,
-      rideId: ride.id,
-      courier: ride.user,
-      score: ride.score,
-      confidenceLevel: ride.scoreCard?.confidenceLevel ?? null,
-      totalDistanceM: ride.totalDistanceM,
-      durationS: ride.durationS,
-      startedAt: ride.startedAt,
-      qualityScore: ride.analytics?.qualityScore ?? null,
-    }));
-  }
-
-  async getRides(filters: DashboardRideFilters) {
-    const page = Math.max(1, filters.page ?? 1);
-    const limit = Math.min(100, Math.max(1, filters.limit ?? 20));
+  async getRides(params?: {
+    status?: string;
+    courierId?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, params?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, params?.limit ?? 20));
     const skip = (page - 1) * limit;
 
-    const where: Prisma.RideWhereInput = {};
+    const where: {
+      status?: RideStatus;
+      userId?: string;
+    } = {};
 
-    if (filters.status) {
-      where.status = filters.status as any;
+    if (params?.status) {
+      where.status = params.status as RideStatus;
     }
 
-    if (filters.userId) {
-      where.userId = filters.userId;
+    if (params?.courierId) {
+      where.userId = params.courierId;
     }
 
-    if (filters.from || filters.to) {
-      where.startedAt = {};
-      if (filters.from) {
-        where.startedAt.gte = new Date(filters.from);
-      }
-      if (filters.to) {
-        where.startedAt.lte = new Date(filters.to);
-      }
-    }
-
-    const [total, rides] = await Promise.all([
+    const [total, items] = await Promise.all([
       this.prisma.ride.count({ where }),
       this.prisma.ride.findMany({
         where,
+        skip,
+        take: limit,
+        orderBy: [{ startedAt: 'desc' }, { createdAt: 'desc' }],
         include: {
           user: {
             select: {
               id: true,
               name: true,
               phone: true,
+              isActive: true,
+              lastSeenAt: true,
+              availabilityStatus: true,
             },
           },
-          analytics: true,
-          scoreCard: true,
-          _count: {
+          orders: {
+            orderBy: { createdAt: 'asc' },
             select: {
-              rideEvents: true,
-              telemetryPoints: true,
-              orders: true,
+              id: true,
+              externalRef: true,
+              status: true,
+              pickupLat: true,
+              pickupLng: true,
+              dropoffLat: true,
+              dropoffLng: true,
+              assignedAt: true,
+              pickedUpAt: true,
+              deliveredAt: true,
+              estimatedPickupTime: true,
+              estimatedDeliveryTime: true,
+              actualPickupTime: true,
+              actualDeliveryTime: true,
             },
           },
         },
-        orderBy: {
-          startedAt: 'desc',
-        },
-        skip,
-        take: limit,
       }),
     ]);
 
@@ -149,50 +172,54 @@ export class DashboardService {
       page,
       limit,
       total,
-      items: rides.map((ride) => ({
+      items: items.map((ride) => ({
         id: ride.id,
         status: ride.status,
         startedAt: ride.startedAt,
         endedAt: ride.endedAt,
-        durationS: ride.durationS,
-        totalDistanceM: ride.totalDistanceM,
         score: ride.score,
-        courier: ride.user,
-        analytics: ride.analytics,
-        scoreCard: ride.scoreCard,
-        eventCount: ride._count.rideEvents,
-        telemetryCount: ride._count.telemetryPoints,
-        orderCount: ride._count.orders,
+        courier: ride.user
+          ? {
+              id: ride.user.id,
+              name: ride.user.name,
+              phone: ride.user.phone,
+              isActive: ride.user.isActive,
+              lastSeenAt: ride.user.lastSeenAt,
+              availabilityStatus: ride.user.availabilityStatus,
+            }
+          : null,
+        orderCount: ride.orders.length,
+        orders: ride.orders,
       })),
     };
   }
 
-  async getRideDetail(id: string) {
+  async getRideDetail(rideId: string) {
     const ride = await this.prisma.ride.findUnique({
-      where: { id },
+      where: { id: rideId },
       include: {
         user: {
           select: {
             id: true,
             name: true,
             phone: true,
-          },
-        },
-        analytics: true,
-        scoreCard: true,
-        telemetryPoints: {
-          orderBy: {
-            ts: 'asc',
-          },
-        },
-        rideEvents: {
-          orderBy: {
-            ts: 'asc',
+            isActive: true,
+            lastSeenAt: true,
+            availabilityStatus: true,
+            availabilityUpdatedAt: true,
           },
         },
         orders: {
-          orderBy: {
-            createdAt: 'asc',
+          orderBy: { createdAt: 'asc' },
+          include: {
+            courier: {
+              select: {
+                id: true,
+                name: true,
+                phone: true,
+                availabilityStatus: true,
+              },
+            },
           },
         },
       },
@@ -202,205 +229,70 @@ export class DashboardService {
       throw new NotFoundException('Ride not found');
     }
 
-    return ride;
-  }
-
-  async getCouriers() {
-    const couriers = await this.prisma.user.findMany({
-      where: { role: 'COURIER' },
-      include: {
-        rides: {
-          take: 1,
-          orderBy: { startedAt: 'desc' },
-          include: {
-            analytics: true,
-            scoreCard: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const now = Date.now();
-
-    return couriers.map((courier) => {
-      const lastRide = courier.rides[0] ?? null;
-      const online =
-        courier.lastSeenAt &&
-        now - new Date(courier.lastSeenAt).getTime() <= 60 * 1000;
-
-      return {
-        id: courier.id,
-        name: courier.name,
-        phone: courier.phone,
-        lastSeenAt: courier.lastSeenAt,
-        online: Boolean(online),
-        lastRide,
-      };
-    });
-  }
-
-  async getPilotSummary() {
-    const riskyRides = await this.prisma.ride.findMany({
+    const telemetryPoints = await this.prisma.telemetryPoint.findMany({
       where: {
-        status: 'COMPLETED',
-        score: { not: null, lt: 70 },
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        analytics: true,
-        scoreCard: true,
+        rideId: ride.id,
       },
       orderBy: {
-        score: 'asc',
+        ts: 'desc',
       },
-      take: 10,
-    });
-
-    return {
-      generatedAt: new Date(),
-      riskyRides,
-    };
-  }
-
-  async getOrdersOverview() {
-    const orders = await this.prisma.order.findMany({
-      include: {
-        courier: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        ride: {
-          select: {
-            id: true,
-            status: true,
-            startedAt: true,
-            endedAt: true,
-            score: true,
-          },
-        },
+      take: 50,
+      select: {
+        id: true,
+        ts: true,
+        lat: true,
+        lng: true,
+        speedKmh: true,
+        heading: true,
+        accuracyM: true,
       },
     });
 
-    const enriched = orders.map((order) => this.enrichOrder(order));
-
-    const delivered = enriched.filter((order) => order.status === 'DELIVERED');
-    const onTimeDeliveryCount = delivered.filter(
-      (order) => order.metrics.onTimeDelivery === true,
-    ).length;
-    const lateDeliveryCount = delivered.filter(
-      (order) => order.metrics.deliveryEtaStatus === 'late',
-    ).length;
-
-    const pickupDelays = enriched
-      .map((order) => order.metrics.pickupDelaySeconds)
-      .filter((value): value is number => typeof value === 'number');
-
-    const deliveryDelays = enriched
-      .map((order) => order.metrics.deliveryDelaySeconds)
-      .filter((value): value is number => typeof value === 'number');
-
     return {
-      totalOrders: enriched.length,
-      pendingOrders: enriched.filter((o) => o.status === 'PENDING').length,
-      assignedOrders: enriched.filter((o) => o.status === 'ASSIGNED').length,
-      pickedUpOrders: enriched.filter((o) => o.status === 'PICKED_UP').length,
-      deliveredOrders: enriched.filter((o) => o.status === 'DELIVERED').length,
-      cancelledOrders: enriched.filter((o) => o.status === 'CANCELLED').length,
-      onTimeDeliveryCount,
-      lateDeliveryCount,
-      averagePickupDelaySeconds:
-        pickupDelays.length > 0
-          ? Math.round(
-              pickupDelays.reduce((sum, value) => sum + value, 0) /
-                  pickupDelays.length,
-            )
-          : null,
-      averageDeliveryDelaySeconds:
-        deliveryDelays.length > 0
-          ? Math.round(
-              deliveryDelays.reduce((sum, value) => sum + value, 0) /
-                  deliveryDelays.length,
-            )
-          : null,
+      id: ride.id,
+      status: ride.status,
+      startedAt: ride.startedAt,
+      endedAt: ride.endedAt,
+      score: ride.score,
+      courier: ride.user,
+      orderCount: ride.orders.length,
+      orders: ride.orders,
+      telemetry: telemetryPoints,
     };
   }
 
-  async getOrders(filters: DashboardOrderFilters) {
-    const page = Math.max(1, filters.page ?? 1);
-    const limit = Math.min(100, Math.max(1, filters.limit ?? 20));
-    const skip = (page - 1) * limit;
-
-    const where: Prisma.OrderWhereInput = {};
-
-    if (filters.status) {
-      where.status = filters.status as any;
-    }
-
-    if (filters.courierId) {
-      where.assignedCourierId = filters.courierId;
-    }
-
-    if (filters.rideId) {
-      where.rideId = filters.rideId;
-    }
-
-    const [total, items] = await Promise.all([
-      this.prisma.order.count({ where }),
-      this.prisma.order.findMany({
-        where,
-        include: {
-          courier: {
-            select: {
-              id: true,
-              name: true,
-              phone: true,
-            },
-          },
-          ride: {
-            select: {
-              id: true,
-              status: true,
-              startedAt: true,
-              endedAt: true,
-              score: true,
-            },
-          },
-        },
-        orderBy: {
-          createdAt: 'desc',
-        },
-        skip,
-        take: limit,
-      }),
-    ]);
-
-    return {
-      page,
-      limit,
-      total,
-      items: items.map((item) => this.enrichOrder(item)),
-    };
+  async getRidePlan(rideId: string) {
+    return this.ordersService.getRidePlan(rideId);
   }
 
-  async getOrderById(id: string) {
+  async getOrders(params?: {
+    status?: string;
+    courierId?: string;
+    rideId?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    return this.ordersService.listOrders({
+      status: params?.status,
+      courierId: params?.courierId,
+      rideId: params?.rideId,
+      page: params?.page,
+      limit: params?.limit,
+    });
+  }
+
+  async getOrderDetail(orderId: string) {
     const order = await this.prisma.order.findUnique({
-      where: { id },
+      where: { id: orderId },
       include: {
         courier: {
           select: {
             id: true,
             name: true,
             phone: true,
+            lastSeenAt: true,
+            availabilityStatus: true,
+            availabilityUpdatedAt: true,
           },
         },
         ride: {
@@ -416,20 +308,194 @@ export class DashboardService {
     });
 
     if (!order) {
-      return null;
+      throw new NotFoundException('Order not found');
     }
 
-    return this.enrichOrder(order);
+    const [dispatchPanel, dispatchLogs] = await Promise.all([
+      this.getDispatchPanel(orderId),
+      this.ordersService.getOrderDispatchLogs(orderId),
+    ]);
+
+    return {
+      ...order,
+      dispatchPanel,
+      dispatchLogs,
+    };
   }
 
-  async getCourierScore(courierId: string) {
-    const courier = await this.prisma.user.findUnique({
-      where: { id: courierId },
-      select: {
-        id: true,
-        name: true,
-        phone: true,
-        role: true,
+  async getCouriers(params?: {
+    availabilityStatus?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, params?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, params?.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const where: {
+      role: UserRole;
+      availabilityStatus?: CourierAvailabilityStatus;
+    } = {
+      role: UserRole.COURIER,
+    };
+
+    if (params?.availabilityStatus) {
+      where.availabilityStatus =
+        params.availabilityStatus as CourierAvailabilityStatus;
+    }
+
+    const [total, couriers] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ isActive: 'desc' }, { updatedAt: 'desc' }],
+        include: {
+          rides: {
+            where: {
+              status: RideStatus.ACTIVE,
+            },
+            take: 1,
+            orderBy: {
+              startedAt: 'desc',
+            },
+            include: {
+              orders: {
+                where: {
+                  status: {
+                    in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const latestTelemetryList = await Promise.all(
+      couriers.map(async (courier) => {
+        const point = await this.prisma.telemetryPoint.findFirst({
+          where: {
+            userId: courier.id,
+          },
+          orderBy: {
+            ts: 'desc',
+          },
+          select: {
+            ts: true,
+            lat: true,
+            lng: true,
+            rideId: true,
+          },
+        });
+
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+
+        const deliveredOrdersToday = await this.prisma.order.findMany({
+          where: {
+            assignedCourierId: courier.id,
+            status: OrderStatus.DELIVERED,
+            deliveredAt: {
+              gte: startOfDay,
+            },
+          },
+          select: {
+            pickupLat: true,
+            pickupLng: true,
+            dropoffLat: true,
+            dropoffLng: true,
+          },
+        });
+
+        const totalRouteDistanceMetersToday = deliveredOrdersToday.reduce(
+          (sum, order) =>
+            sum +
+            this.calculateDistanceMeters(
+              order.pickupLat,
+              order.pickupLng,
+              order.dropoffLat,
+              order.dropoffLng,
+            ),
+          0,
+        );
+
+        return {
+          courierId: courier.id,
+          latestTelemetry: point ?? null,
+          deliveredCountToday: deliveredOrdersToday.length,
+          totalRouteDistanceMetersToday: Number(
+            totalRouteDistanceMetersToday.toFixed(2),
+          ),
+        };
+      }),
+    );
+
+    const latestTelemetryMap = new Map(
+      latestTelemetryList.map((item) => [item.courierId, item]),
+    );
+
+    return {
+      page,
+      limit,
+      total,
+      items: couriers.map((courier) => {
+        const activeRide = courier.rides[0] ?? null;
+        const extra = latestTelemetryMap.get(courier.id);
+
+        return {
+          id: courier.id,
+          name: courier.name,
+          phone: courier.phone,
+          role: courier.role,
+          isActive: courier.isActive,
+          lastSeenAt: courier.lastSeenAt,
+          availabilityStatus: courier.availabilityStatus,
+          availabilityUpdatedAt: courier.availabilityUpdatedAt,
+          shiftAutoReadyEnabled: courier.shiftAutoReadyEnabled,
+          activeRide: activeRide
+            ? {
+                id: activeRide.id,
+                status: activeRide.status,
+                openOrderCount: activeRide.orders.length,
+              }
+            : null,
+          latestTelemetry: extra?.latestTelemetry ?? null,
+          dailyStats: {
+            deliveredCountToday: extra?.deliveredCountToday ?? 0,
+            totalRouteDistanceMetersToday:
+              extra?.totalRouteDistanceMetersToday ?? 0,
+          },
+          dispatch: {
+            isAssignable:
+              courier.isActive &&
+              courier.availabilityStatus === CourierAvailabilityStatus.READY,
+            hasOpenOrders: (activeRide?.orders.length ?? 0) > 0,
+            openOrderCount: activeRide?.orders.length ?? 0,
+          },
+        };
+      }),
+    };
+  }
+
+  async getCourierScoring(courierId: string) {
+    const courier = await this.prisma.user.findFirst({
+      where: {
+        id: courierId,
+        role: UserRole.COURIER,
+      },
+      include: {
+        rides: {
+          orderBy: {
+            startedAt: 'desc',
+          },
+          take: 20,
+          include: {
+            orders: true,
+          },
+        },
       },
     });
 
@@ -437,371 +503,188 @@ export class DashboardService {
       throw new NotFoundException('Courier not found');
     }
 
-    const [rides, orders] = await Promise.all([
-      this.prisma.ride.findMany({
-        where: {
-          userId: courierId,
-          status: 'COMPLETED',
-        },
-        include: {
-          scoreCard: true,
-          analytics: true,
-          orders: true,
-        },
-        orderBy: {
-          startedAt: 'desc',
-        },
-        take: 50,
-      }),
-      this.prisma.order.findMany({
-        where: {
-          assignedCourierId: courierId,
-        },
-        include: {
-          ride: {
-            select: {
-              id: true,
-              status: true,
-              startedAt: true,
-              endedAt: true,
-              score: true,
-            },
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const deliveredOrders = await this.prisma.order.findMany({
+      where: {
+        assignedCourierId: courierId,
+        status: OrderStatus.DELIVERED,
+      },
+      orderBy: {
+        deliveredAt: 'desc',
+      },
+      take: 100,
+      select: {
+        id: true,
+        externalRef: true,
+        estimatedPickupTime: true,
+        estimatedDeliveryTime: true,
+        actualPickupTime: true,
+        actualDeliveryTime: true,
+        pickupLat: true,
+        pickupLng: true,
+        dropoffLat: true,
+        dropoffLng: true,
+        deliveredAt: true,
+      },
+    });
+
+    const deliveredToday = deliveredOrders.filter(
+      (order) => order.deliveredAt && order.deliveredAt >= startOfDay,
+    );
+
+    const totalRouteDistanceMetersToday = deliveredToday.reduce(
+      (sum, order) =>
+        sum +
+        this.calculateDistanceMeters(
+          order.pickupLat,
+          order.pickupLng,
+          order.dropoffLat,
+          order.dropoffLng,
+        ),
+      0,
+    );
+
+    const analytics = {
+      totalRides: courier.rides.length,
+      activeRideCount: courier.rides.filter((r) => r.status === RideStatus.ACTIVE)
+        .length,
+      totalDeliveredOrders: deliveredOrders.length,
+      deliveredCountToday: deliveredToday.length,
+      totalRouteDistanceMetersToday: Number(
+        totalRouteDistanceMetersToday.toFixed(2),
+      ),
+      onTimePickupCount: deliveredOrders.filter((order) => {
+        if (!order.estimatedPickupTime || !order.actualPickupTime) return false;
+        return order.actualPickupTime.getTime() <= order.estimatedPickupTime.getTime();
+      }).length,
+      onTimeDeliveryCount: deliveredOrders.filter((order) => {
+        if (!order.estimatedDeliveryTime || !order.actualDeliveryTime) return false;
+        return order.actualDeliveryTime.getTime() <= order.estimatedDeliveryTime.getTime();
+      }).length,
+    };
+
+    return {
+      courier: {
+        id: courier.id,
+        name: courier.name,
+        phone: courier.phone,
+        isActive: courier.isActive,
+        lastSeenAt: courier.lastSeenAt,
+        availabilityStatus: courier.availabilityStatus,
+        availabilityUpdatedAt: courier.availabilityUpdatedAt,
+      },
+      analytics,
+      recentRides: courier.rides.map((ride) => ({
+        id: ride.id,
+        status: ride.status,
+        startedAt: ride.startedAt,
+        endedAt: ride.endedAt,
+        score: ride.score,
+        orderCount: ride.orders.length,
+      })),
+      recentDeliveredOrders: deliveredOrders.map((order) => ({
+        ...order,
+        routeDistanceMeters: Number(
+          this.calculateDistanceMeters(
+            order.pickupLat,
+            order.pickupLng,
+            order.dropoffLat,
+            order.dropoffLng,
+          ).toFixed(2),
+        ),
+      })),
+    };
+  }
+
+  async getDispatchPanel(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        courier: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            availabilityStatus: true,
           },
         },
-        orderBy: {
-          createdAt: 'desc',
+        ride: {
+          select: {
+            id: true,
+            status: true,
+            startedAt: true,
+          },
         },
-        take: 100,
-      }),
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const [recommendation, batchSuggestions] = await Promise.all([
+      this.ordersService.recommendCourier(orderId),
+      this.ordersService.suggestBatchCandidates(orderId),
     ]);
 
-    const enrichedOrders = orders.map((order) => this.enrichOrder(order));
-
-    const completedRideScores = rides
-      .map((ride) => ride.score)
-      .filter((value): value is number => typeof value === 'number');
-
-    const deliveredOrders = enrichedOrders.filter(
-      (order) => order.status === 'DELIVERED',
-    );
-
-    const onTimeDeliveredOrders = deliveredOrders.filter(
-      (order) => order.metrics.onTimeDelivery === true,
-    );
-
-    const deliveryDelayValues = deliveredOrders
-      .map((order) => order.metrics.deliveryDelaySeconds)
-      .filter((value): value is number => typeof value === 'number');
-
-    const deliveredPerRideBase =
-        rides.length > 0 ? deliveredOrders.length / rides.length : 0;
-
-    const multiOrderRideCount =
-        rides.filter((ride) => ride.orders.length >= 2).length;
-    const multiOrderRate =
-        rides.length > 0 ? multiOrderRideCount / rides.length : 0;
-
-    const averageOrdersPerRide =
-        rides.length > 0
-            ? rides.reduce((sum, ride) => sum + ride.orders.length, 0) /
-                rides.length
-            : 0;
-
-    const drivingScore =
-        completedRideScores.length > 0
-            ? Number(
-                (
-                  completedRideScores.reduce((sum, value) => sum + value, 0) /
-                  completedRideScores.length
-                ).toFixed(2),
-              )
-            : null;
-
-    let punctualityScore: number | null = null;
-    if (deliveredOrders.length > 0) {
-      const onTimeRate = onTimeDeliveredOrders.length / deliveredOrders.length;
-      const avgDelay =
-          deliveryDelayValues.length > 0
-              ? deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
-                  deliveryDelayValues.length
-              : 0;
-
-      const delayPenalty = Math.max(0, avgDelay) / 60;
-      punctualityScore = this.clamp(
-        Number((onTimeRate * 100 - delayPenalty).toFixed(2)),
-        0,
-        100,
-      );
-    }
-
-    let deliveryEfficiencyScore: number | null = null;
-    if (rides.length > 0 || deliveredOrders.length > 0) {
-      const deliveredPerRideScore = this.clamp(deliveredPerRideBase * 35, 0, 100);
-
-      const avgDeliveryDelay =
-          deliveryDelayValues.length > 0
-              ? deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
-                  deliveryDelayValues.length
-              : 0;
-
-      const delayComponent = this.clamp(
-        100 - Math.max(0, avgDeliveryDelay) / 60,
-        0,
-        100,
-      );
-
-      deliveryEfficiencyScore = Number(
-        (deliveredPerRideScore * 0.5 + delayComponent * 0.5).toFixed(2),
-      );
-    }
-
-    const sequenceScores: number[] = [];
-
-    for (const ride of rides) {
-      if (ride.orders.length < 2) continue;
-
-      const plan = await this.prisma.order.findMany({
-        where: { rideId: ride.id },
-      });
-
-      if (plan.length < 2) continue;
-
-      const recommended = [...plan].sort(
-        (a, b) =>
-            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-      );
-
-      const actual = [...plan]
-          .filter((o) => o.actualDeliveryTime)
-          .sort(
-            (a, b) =>
-                new Date(a.actualDeliveryTime!).getTime() -
-                new Date(b.actualDeliveryTime!).getTime(),
-          );
-
-      if (actual.length < 2) continue;
-
-      let correct = 0;
-
-      for (let i = 0; i < Math.min(recommended.length, actual.length); i++) {
-        if (recommended[i].id === actual[i].id) {
-          correct++;
-        }
-      }
-
-      const accuracy = correct / Math.min(recommended.length, actual.length);
-      sequenceScores.push(accuracy * 100);
-    }
-
-    let multiOrderScore: number | null = null;
-    if (rides.length > 0) {
-      const multiOrderRateScore = this.clamp(multiOrderRate * 100, 0, 100);
-      const averageOrdersPerRideScore = this.clamp(
-        averageOrdersPerRide * 40,
-        0,
-        100,
-      );
-
-      const avgSequenceScore =
-          sequenceScores.length > 0
-              ? sequenceScores.reduce((sum, v) => sum + v, 0) /
-                  sequenceScores.length
-              : null;
-
-      multiOrderScore = Number(
-        (
-          multiOrderRateScore * 0.3 +
-          averageOrdersPerRideScore * 0.3 +
-          (avgSequenceScore ?? 50) * 0.4
-        ).toFixed(2),
-      );
-    }
-
-    const weights = {
-      driving: drivingScore !== null ? 0.4 : 0,
-      punctuality: punctualityScore !== null ? 0.25 : 0,
-      deliveryEfficiency: deliveryEfficiencyScore !== null ? 0.2 : 0,
-      multiOrder: multiOrderScore !== null ? 0.15 : 0,
-    };
-
-    const totalWeight =
-        weights.driving +
-        weights.punctuality +
-        weights.deliveryEfficiency +
-        weights.multiOrder;
-
-    const overallScore =
-        totalWeight > 0
-            ? Number(
-                (
-                  ((drivingScore ?? 0) * weights.driving +
-                          (punctualityScore ?? 0) * weights.punctuality +
-                          (deliveryEfficiencyScore ?? 0) *
-                              weights.deliveryEfficiency +
-                          (multiOrderScore ?? 0) * weights.multiOrder) /
-                      totalWeight
-                ).toFixed(2),
-              )
-            : null;
-
     return {
-      courier,
-      summary: {
-        totalCompletedRides: rides.length,
-        totalAssignedOrders: enrichedOrders.length,
-        totalDeliveredOrders: deliveredOrders.length,
-        onTimeDeliveredOrders: onTimeDeliveredOrders.length,
-        onTimeDeliveryRate:
-            deliveredOrders.length > 0
-                ? Number(
-                    (
-                      (onTimeDeliveredOrders.length / deliveredOrders.length) *
-                      100
-                    ).toFixed(2),
-                  )
-                : null,
-        averageRideScore: drivingScore,
-        averageDeliveryDelaySeconds:
-            deliveryDelayValues.length > 0
-                ? Math.round(
-                    deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
-                        deliveryDelayValues.length,
-                  )
-                : null,
-        deliveredOrdersPerRide:
-            rides.length > 0
-                ? Number((deliveredOrders.length / rides.length).toFixed(2))
-                : null,
-        multiOrderRideCount,
-        multiOrderRate:
-            rides.length > 0
-                ? Number((multiOrderRate * 100).toFixed(2))
-                : null,
-        averageOrdersPerRide:
-            rides.length > 0
-                ? Number(averageOrdersPerRide.toFixed(2))
-                : null,
-        averageSequenceAccuracy:
-            sequenceScores.length > 0
-                ? Number(
-                    (
-                      sequenceScores.reduce((sum, v) => sum + v, 0) /
-                      sequenceScores.length
-                    ).toFixed(2),
-                  )
-                : null,
+      order: {
+        id: order.id,
+        externalRef: order.externalRef,
+        status: order.status,
+        assignedCourierId: order.assignedCourierId,
+        rideId: order.rideId,
+        pickupLat: order.pickupLat,
+        pickupLng: order.pickupLng,
+        dropoffLat: order.dropoffLat,
+        dropoffLng: order.dropoffLng,
       },
-      score: {
-        drivingScore,
-        punctualityScore,
-        deliveryEfficiencyScore,
-        multiOrderScore,
-        overallScore,
-        version: 'courier-score-v3-multi-order',
-      },
-      recent: {
-        rides: rides.slice(0, 10),
-        orders: enrichedOrders.slice(0, 10),
-      },
+      currentAssignment: order.courier
+        ? {
+            courier: order.courier,
+            ride: order.ride,
+          }
+        : null,
+      recommendation,
+      batchSuggestions,
     };
   }
 
-  private enrichOrder<T extends {
-    estimatedPickupTime: Date | null;
-    estimatedDeliveryTime: Date | null;
-    actualPickupTime: Date | null;
-    actualDeliveryTime: Date | null;
-    assignedAt: Date | null;
-    pickedUpAt: Date | null;
-    deliveredAt: Date | null;
-    status: string;
-  }>(order: T) {
-    const pickupDelaySeconds = this.getDelaySeconds(
-      order.estimatedPickupTime,
-      order.actualPickupTime,
-    );
-
-    const deliveryDelaySeconds = this.getDelaySeconds(
-      order.estimatedDeliveryTime,
-      order.actualDeliveryTime,
-    );
-
-    const onTimePickup =
-        order.actualPickupTime && order.estimatedPickupTime
-            ? pickupDelaySeconds !== null && pickupDelaySeconds <= 0
-            : null;
-
-    const onTimeDelivery =
-        order.actualDeliveryTime && order.estimatedDeliveryTime
-            ? deliveryDelaySeconds !== null && deliveryDelaySeconds <= 0
-            : null;
-
-    const pickupEtaStatus = this.getEtaStatus(
-      order.estimatedPickupTime,
-      order.actualPickupTime,
-    );
-
-    const deliveryEtaStatus = this.getEtaStatus(
-      order.estimatedDeliveryTime,
-      order.actualDeliveryTime,
-    );
-
-    return {
-      ...order,
-      metrics: {
-        pickupDelaySeconds,
-        deliveryDelaySeconds,
-        onTimePickup,
-        onTimeDelivery,
-        pickupEtaStatus,
-        deliveryEtaStatus,
-      },
-    };
+  async getDispatchQueue() {
+    return this.ordersService.getDispatchQueue();
   }
 
-  private getDelaySeconds(
-    estimated: Date | null,
-    actual: Date | null,
-  ): number | null {
-    if (!estimated || !actual) {
-      return null;
-    }
-
-    return Math.round((actual.getTime() - estimated.getTime()) / 1000);
+  async getDispatchTriggerCheck() {
+    return this.ordersService.getDispatchTriggerCheck();
   }
 
-  private getEtaStatus(
-    estimated: Date | null,
-    actual: Date | null,
-  ): 'pending' | 'on_time' | 'late' | 'early' | 'unknown' {
-    if (!estimated && !actual) {
-      return 'unknown';
-    }
-
-    if (estimated && !actual) {
-      return 'pending';
-    }
-
-    if (!estimated || !actual) {
-      return 'unknown';
-    }
-
-    const diffSeconds = Math.round(
-      (actual.getTime() - estimated.getTime()) / 1000,
-    );
-
-    if (diffSeconds > 0) {
-      return 'late';
-    }
-
-    if (diffSeconds < 0) {
-      return 'early';
-    }
-
-    return 'on_time';
+  async getDispatchLogs(params: DispatchLogsParams) {
+    return this.ordersService.getDispatchLogs(params);
   }
 
-  private clamp(value: number, min: number, max: number) {
-    return Math.min(max, Math.max(min, value));
+  private calculateDistanceMeters(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ) {
+    const toRad = (value: number) => (value * Math.PI) / 180;
+    const earthRadiusM = 6371000;
+
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return earthRadiusM * c;
   }
 }

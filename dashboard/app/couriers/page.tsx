@@ -5,116 +5,157 @@ type CourierItem = {
   id: string;
   name: string;
   phone: string;
-  lastSeenAt: string | null;
-  online: boolean;
-  lastRide: {
+  role?: string;
+  isActive?: boolean;
+  lastSeenAt?: string | null;
+  availabilityStatus?: 'OFFLINE' | 'READY' | 'DELIVERY';
+  availabilityUpdatedAt?: string | null;
+  shiftAutoReadyEnabled?: boolean;
+  activeRide?: {
     id: string;
     status: string;
-    startedAt: string;
-    endedAt: string | null;
-    totalDistanceM: number | null;
-    durationS: number | null;
-    score: number | null;
-    analytics?: {
-      qualityScore?: number | null;
-    } | null;
-    scoreCard?: {
-      confidenceLevel?: string | null;
-    } | null;
+    openOrderCount?: number;
+    orderCount?: number;
   } | null;
+  latestTelemetry?: {
+    ts: string;
+    lat: number;
+    lng: number;
+    rideId?: string | null;
+  } | null;
+  dailyStats?: {
+    deliveredCountToday?: number;
+    totalRouteDistanceMetersToday?: number;
+  };
+  dispatch?: {
+    isAssignable?: boolean;
+    hasOpenOrders?: boolean;
+    openOrderCount?: number;
+  };
 };
 
+type CouriersResponse = {
+  page?: number;
+  limit?: number;
+  total?: number;
+  items?: CourierItem[];
+};
+
+function formatDate(value?: string | null) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
+}
+
+function availabilityBadgeClass(status?: CourierItem['availabilityStatus']) {
+  switch (status) {
+    case 'READY':
+      return 'bg-emerald-100 text-emerald-700';
+    case 'DELIVERY':
+      return 'bg-blue-100 text-blue-700';
+    case 'OFFLINE':
+    default:
+      return 'bg-slate-100 text-slate-700';
+  }
+}
+
+async function getCouriers(): Promise<CouriersResponse> {
+  try {
+    return await apiFetch<CouriersResponse>(
+      '/dashboard/couriers?page=1&limit=100',
+    );
+  } catch (error) {
+    console.error('Failed to fetch couriers', error);
+    return { items: [] };
+  }
+}
+
 export default async function CouriersPage() {
-  const couriers = (await apiFetch('/dashboard/couriers')) as CourierItem[];
-  const items = Array.isArray(couriers) ? couriers : [];
+  const data = await getCouriers();
+  const couriers = Array.isArray(data?.items) ? data.items : [];
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-slate-50 p-8">
       <div className="mx-auto max-w-7xl space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Couriers</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Courier status, latest ride snapshot, and score detail access
+          <h1 className="text-3xl font-bold text-slate-900">Couriers</h1>
+          <p className="mt-2 text-slate-600">
+            Courier availability, günlük performans ve scoring görünümü.
           </p>
         </div>
 
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-left text-slate-500">
-              <tr>
-                <th className="px-4 py-3">Courier</th>
-                <th className="px-4 py-3">Phone</th>
-                <th className="px-4 py-3">Online</th>
-                <th className="px-4 py-3">Last Seen</th>
-                <th className="px-4 py-3">Last Ride</th>
-                <th className="px-4 py-3">Last Score</th>
-                <th className="px-4 py-3">Confidence</th>
-                <th className="px-4 py-3">Score View</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.length === 0 ? (
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-100 text-slate-600">
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
-                    No couriers found.
-                  </td>
+                  <th className="px-4 py-3 text-left">Name</th>
+                  <th className="px-4 py-3 text-left">Phone</th>
+                  <th className="px-4 py-3 text-left">Availability</th>
+                  <th className="px-4 py-3 text-left">Assignable</th>
+                  <th className="px-4 py-3 text-left">Delivered Today</th>
+                  <th className="px-4 py-3 text-left">Route Distance Today</th>
+                  <th className="px-4 py-3 text-left">Active Ride</th>
+                  <th className="px-4 py-3 text-left">Last Seen</th>
+                  <th className="px-4 py-3 text-left">Scoring</th>
                 </tr>
-              ) : (
-                items.map((courier) => (
-                  <tr key={courier.id} className="border-t border-slate-100">
+              </thead>
+              <tbody>
+                {couriers.map((courier) => (
+                  <tr key={courier.id} className="border-t border-slate-200">
                     <td className="px-4 py-3 font-medium text-slate-900">
-                      {courier.name ?? '-'}
+                      {courier.name}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">{courier.phone ?? '-'}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {courier.phone}
+                    </td>
                     <td className="px-4 py-3">
                       <span
-                        className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${
-                          courier.online
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-slate-100 text-slate-600'
-                        }`}
+                        className={`rounded-full px-2 py-1 text-xs font-medium ${availabilityBadgeClass(
+                          courier.availabilityStatus,
+                        )}`}
                       >
-                        {courier.online ? 'Online' : 'Offline'}
+                        {courier.availabilityStatus ?? 'OFFLINE'}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {courier.lastSeenAt
-                        ? new Date(courier.lastSeenAt).toLocaleString()
-                        : '-'}
+                      {courier.dispatch?.isAssignable ? 'Yes' : 'No'}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {courier.lastRide ? (
-                        <Link
-                          href={`/rides/${courier.lastRide.id}`}
-                          className="text-blue-600 hover:underline"
-                        >
-                          {courier.lastRide.id}
-                        </Link>
-                      ) : (
-                        '-'
-                      )}
+                      {courier.dailyStats?.deliveredCountToday ?? 0}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {typeof courier.lastRide?.score === 'number'
-                        ? courier.lastRide.score.toFixed(2)
-                        : '-'}
+                      {courier.dailyStats?.totalRouteDistanceMetersToday ?? 0} m
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {courier.lastRide?.scoreCard?.confidenceLevel ?? '-'}
+                      {courier.activeRide?.id ?? '-'}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {formatDate(courier.lastSeenAt)}
                     </td>
                     <td className="px-4 py-3">
                       <Link
-                        href={`/couriers/${courier.id}`}
-                        className="rounded-lg bg-black px-3 py-2 text-xs font-medium text-white hover:opacity-90"
+                        href={`/couriers/${courier.id}/scoring`}
+                        className="text-blue-600 hover:underline"
                       >
-                        View Score
+                        View scoring
                       </Link>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ))}
+
+                {couriers.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={9}
+                      className="px-4 py-8 text-center text-slate-500"
+                    >
+                      No couriers found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </main>

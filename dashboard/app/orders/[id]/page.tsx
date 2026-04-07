@@ -1,292 +1,614 @@
 import Link from 'next/link';
-import { fetchJson } from '@/lib/api';
-import OrderDispatchPanel from '@/components/order-dispatch-panel';
+import {
+  apiFetch,
+  approveAutoAssign,
+  autoAssignOrder,
+  rejectRecommendation,
+} from '@/lib/api';
 
 type OrderDetailResponse = {
   id: string;
-  externalRef: string | null;
+  externalRef?: string | null;
+  status: string;
   pickupLat: number;
   pickupLng: number;
   dropoffLat: number;
   dropoffLng: number;
-  status: string;
-  assignedCourierId: string | null;
-  rideId: string | null;
-  assignedAt: string | null;
-  pickedUpAt: string | null;
-  deliveredAt: string | null;
-  estimatedPickupTime: string | null;
-  estimatedDeliveryTime: string | null;
-  actualPickupTime: string | null;
-  actualDeliveryTime: string | null;
-  notes: string | null;
-  createdAt: string;
-  updatedAt: string;
-  courier: {
+  notes?: string | null;
+  assignedAt?: string | null;
+  pickedUpAt?: string | null;
+  deliveredAt?: string | null;
+  estimatedPickupTime?: string | null;
+  estimatedDeliveryTime?: string | null;
+  actualPickupTime?: string | null;
+  actualDeliveryTime?: string | null;
+  courier?: {
     id: string;
-    name: string | null;
-    phone: string | null;
+    name: string;
+    phone: string;
+    lastSeenAt?: string | null;
+    availabilityStatus?: string;
+    availabilityUpdatedAt?: string | null;
   } | null;
-  ride: {
+  ride?: {
     id: string;
     status: string;
-    startedAt: string | null;
-    endedAt: string | null;
-    score: number | null;
+    startedAt?: string | null;
+    endedAt?: string | null;
+    score?: number | null;
   } | null;
-  metrics?: {
-    pickupDelaySeconds: number | null;
-    deliveryDelaySeconds: number | null;
-    onTimePickup: boolean | null;
-    onTimeDelivery: boolean | null;
-    pickupEtaStatus: string;
-    deliveryEtaStatus: string;
+  dispatchPanel?: {
+    order: {
+      id: string;
+      externalRef?: string | null;
+      status: string;
+      assignedCourierId?: string | null;
+      rideId?: string | null;
+      pickupLat: number;
+      pickupLng: number;
+      dropoffLat: number;
+      dropoffLng: number;
+    };
+    currentAssignment: {
+      courier: {
+        id: string;
+        name: string;
+        phone: string;
+        availabilityStatus?: string;
+      };
+      ride: {
+        id: string;
+        status: string;
+        startedAt?: string | null;
+      } | null;
+    } | null;
+    recommendation: {
+      ruleEngine?: {
+        name: string;
+        priorityOrder: string[];
+      };
+      recommendedCourier: CandidateCourier | null;
+      candidates: CandidateCourier[];
+    };
+    batchSuggestions: {
+      suggestions: BatchSuggestion[];
+    };
   };
+  dispatchLogs?: DispatchLogItem[];
 };
 
-function formatDate(value: string | null | undefined) {
+type CandidateCourier = {
+  courier: {
+    id: string;
+    name: string;
+    phone: string;
+    lastSeenAt?: string | null;
+    availabilityStatus?: string;
+  };
+  online: boolean;
+  activeRide: {
+    id: string;
+    status: string;
+    orderCount: number;
+  } | null;
+  location: {
+    lat: number | null;
+    lng: number | null;
+    ts: string | null;
+    rideId: string | null;
+    ageSeconds: number | null;
+    source: string;
+    fresh: boolean;
+  };
+  dailyStats: {
+    deliveredCountToday: number;
+    totalRouteDistanceMetersToday: number;
+  };
+  constraints: {
+    activeOrderCount: number;
+    activeStopCount: number;
+    detourMeters: number;
+    valid: boolean;
+    reasons: string[];
+  };
+  metrics: {
+    pickupDistanceM: number | null;
+    estimatedPickupEtaMinutes: number | null;
+    deliveredCountPriorityScore: number;
+    routeDistancePriorityScore: number;
+    distanceScore: number;
+    onlineScore: number;
+    freshnessScore: number;
+    activeRidePenalty: number;
+    activeRideOrderPenalty: number;
+    staleLocationPenalty: number;
+    missingLocationPenalty: number;
+    availabilityStatus?: string;
+    recommendationReason?: {
+      basedOn: string;
+      deliveredCountToday: number;
+      totalRouteDistanceMetersToday: number;
+      hasFreshLocation: boolean;
+      online: boolean;
+      hasActiveRide: boolean;
+    };
+  };
+  recommendationScore: number;
+};
+
+type BatchSuggestion = {
+  order: {
+    id: string;
+    externalRef?: string | null;
+    status: string;
+    pickupLat: number;
+    pickupLng: number;
+    dropoffLat: number;
+    dropoffLng: number;
+  };
+  metrics: {
+    pickupDistanceM: number;
+    dropoffDistanceM: number;
+    averageDistanceM: number;
+  };
+  batchScore: number;
+};
+
+type DispatchLogItem = {
+  id: string;
+  orderId: string;
+  recommendedCourierId: string | null;
+  status: string;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  recommendedCourier: {
+    id: string;
+    name: string;
+    phone: string;
+    availabilityStatus: string;
+  } | null;
+};
+
+function formatDate(value?: string | null) {
   if (!value) return '-';
   return new Date(value).toLocaleString();
 }
 
-function formatSeconds(value: number | null | undefined) {
-  if (typeof value !== 'number') return '-';
-  return `${value}s`;
+async function getOrderDetail(id: string): Promise<OrderDetailResponse | null> {
+  try {
+    return await apiFetch<OrderDetailResponse>(`/dashboard/orders/${id}`);
+  } catch (error) {
+    console.error('Failed to fetch order detail', error);
+    return null;
+  }
 }
 
-export default async function OrderDetailPage(
-  props: PageProps<'/orders/[id]'>
-) {
-  const { id } = await props.params;
+async function triggerAutoAssign(orderId: string) {
+  'use server';
 
-  const order = (await fetchJson(`/dashboard/orders/${id}`)) as OrderDetailResponse | null;
+  try {
+    await autoAssignOrder(orderId);
+  } catch (error) {
+    console.error('Auto assign failed', error);
+  }
+}
+
+async function triggerApproveAutoAssign(orderId: string) {
+  'use server';
+
+  try {
+    await approveAutoAssign(orderId);
+  } catch (error) {
+    console.error('Approve auto assign failed', error);
+  }
+}
+
+async function triggerRejectRecommendation(orderId: string, courierId?: string) {
+  'use server';
+
+  try {
+    await rejectRecommendation(orderId, {
+      rejectedCourierId: courierId,
+      reason: 'ops_manual_reject',
+    });
+  } catch (error) {
+    console.error('Reject recommendation failed', error);
+  }
+}
+
+export default async function OrderDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const order = await getOrderDetail(id);
 
   if (!order) {
     return (
-      <main className="min-h-screen bg-slate-50 p-6">
+      <main className="min-h-screen bg-slate-50 p-8">
         <div className="mx-auto max-w-5xl">
-          <Link href="/orders" className="text-sm text-blue-600 hover:underline">
-            ← Back to orders
-          </Link>
-
-          <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h1 className="text-xl font-semibold text-slate-900">Order not found</h1>
-            <p className="mt-2 text-sm text-slate-600">
-              The requested order could not be loaded.
-            </p>
+          <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+            <h1 className="text-2xl font-bold text-slate-900">
+              Order not found
+            </h1>
+            <p className="mt-2 text-slate-600">Sipariş detayı alınamadı.</p>
+            <Link
+              href="/orders"
+              className="mt-4 inline-block text-blue-600 hover:underline"
+            >
+              Back to orders
+            </Link>
           </div>
         </div>
       </main>
     );
   }
 
+  const recommendation = order.dispatchPanel?.recommendation;
+  const recommendedCourier = recommendation?.recommendedCourier ?? null;
+  const candidates = recommendation?.candidates ?? [];
+  const suggestions = order.dispatchPanel?.batchSuggestions?.suggestions ?? [];
+  const dispatchLogs = order.dispatchLogs ?? [];
+
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <div>
-          <Link href="/orders" className="text-sm text-blue-600 hover:underline">
-            ← Back to orders
+    <main className="min-h-screen bg-slate-50 p-8">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">Order Detail</h1>
+            <p className="mt-2 text-slate-600">{order.externalRef ?? order.id}</p>
+          </div>
+          <Link href="/orders" className="text-blue-600 hover:underline">
+            Back to orders
           </Link>
-          <h1 className="mt-2 text-2xl font-semibold text-slate-900">Order Detail</h1>
-          <p className="mt-1 font-mono text-xs text-slate-500">{order.id}</p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-4">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="text-sm text-slate-500">External Ref</div>
-            <div className="mt-2 text-lg font-semibold text-slate-900">
-              {order.externalRef ?? '-'}
-            </div>
-          </div>
-
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="text-sm text-slate-500">Status</div>
-            <div className="mt-2 text-lg font-semibold text-slate-900">
+            <div className="mt-2 text-xl font-semibold text-slate-900">
               {order.status}
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="text-sm text-slate-500">Courier</div>
-            <div className="mt-2 text-lg font-semibold text-slate-900">
-              {order.courier?.name ?? '-'}
+            <div className="text-sm text-slate-500">Assigned At</div>
+            <div className="mt-2 text-sm font-medium text-slate-900">
+              {formatDate(order.assignedAt)}
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="text-sm text-slate-500">Ride</div>
-            <div className="mt-2 text-lg font-semibold text-slate-900">
-              {order.ride?.id ?? '-'}
+            <div className="text-sm text-slate-500">Estimated Delivery</div>
+            <div className="mt-2 text-sm font-medium text-slate-900">
+              {formatDate(order.estimatedDeliveryTime)}
             </div>
-          </div>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
-            <h2 className="text-lg font-semibold text-slate-900">Order Summary</h2>
-
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="text-sm text-slate-500">Created At</div>
-                <div className="mt-1 text-slate-900">{formatDate(order.createdAt)}</div>
-              </div>
-
-              <div>
-                <div className="text-sm text-slate-500">Updated At</div>
-                <div className="mt-1 text-slate-900">{formatDate(order.updatedAt)}</div>
-              </div>
-
-              <div>
-                <div className="text-sm text-slate-500">Assigned At</div>
-                <div className="mt-1 text-slate-900">{formatDate(order.assignedAt)}</div>
-              </div>
-
-              <div>
-                <div className="text-sm text-slate-500">Pickup Time</div>
-                <div className="mt-1 text-slate-900">{formatDate(order.actualPickupTime)}</div>
-              </div>
-
-              <div>
-                <div className="text-sm text-slate-500">Delivery Time</div>
-                <div className="mt-1 text-slate-900">{formatDate(order.actualDeliveryTime)}</div>
-              </div>
-
-              <div>
-                <div className="text-sm text-slate-500">Courier Phone</div>
-                <div className="mt-1 text-slate-900">{order.courier?.phone ?? '-'}</div>
-              </div>
-            </div>
-
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <div className="rounded-xl bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">Pickup Coordinates</div>
-                <div className="mt-1 font-medium text-slate-900">
-                  {order.pickupLat}, {order.pickupLng}
-                </div>
-              </div>
-
-              <div className="rounded-xl bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">Dropoff Coordinates</div>
-                <div className="mt-1 font-medium text-slate-900">
-                  {order.dropoffLat}, {order.dropoffLng}
-                </div>
-              </div>
-            </div>
-
-            {order.notes ? (
-              <div className="mt-6 rounded-xl bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">Notes</div>
-                <div className="mt-1 text-slate-900">{order.notes}</div>
-              </div>
-            ) : null}
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">ETA Metrics</h2>
-
-            <div className="mt-4 space-y-3 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">Pickup Delay</span>
-                <span className="font-medium text-slate-900">
-                  {formatSeconds(order.metrics?.pickupDelaySeconds)}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">Delivery Delay</span>
-                <span className="font-medium text-slate-900">
-                  {formatSeconds(order.metrics?.deliveryDelaySeconds)}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">Pickup ETA Status</span>
-                <span className="font-medium text-slate-900">
-                  {order.metrics?.pickupEtaStatus ?? '-'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">Delivery ETA Status</span>
-                <span className="font-medium text-slate-900">
-                  {order.metrics?.deliveryEtaStatus ?? '-'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">On-time Pickup</span>
-                <span className="font-medium text-slate-900">
-                  {order.metrics?.onTimePickup == null
-                    ? '-'
-                    : order.metrics.onTimePickup
-                    ? 'Yes'
-                    : 'No'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">On-time Delivery</span>
-                <span className="font-medium text-slate-900">
-                  {order.metrics?.onTimeDelivery == null
-                    ? '-'
-                    : order.metrics.onTimeDelivery
-                    ? 'Yes'
-                    : 'No'}
-                </span>
-              </div>
+            <div className="text-sm text-slate-500">Actual Delivery</div>
+            <div className="mt-2 text-sm font-medium text-slate-900">
+              {formatDate(order.actualDeliveryTime)}
             </div>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Dispatch Intelligence</h2>
-          <div className="mt-4">
-            <OrderDispatchPanel orderId={order.id} />
-          </div>
-        </div>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-1">
+            <h2 className="text-lg font-semibold text-slate-900">
+              Current Assignment
+            </h2>
 
-        {order.ride ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">Linked Ride</h2>
-
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="text-sm text-slate-500">Ride ID</div>
-                <div className="mt-1 font-mono text-sm text-slate-900">
-                  {order.ride.id}
+            {order.dispatchPanel?.currentAssignment ? (
+              <div className="mt-4 space-y-2 text-sm text-slate-700">
+                <div>
+                  <span className="font-medium text-slate-900">Courier:</span>{' '}
+                  {order.dispatchPanel.currentAssignment.courier.name}
+                </div>
+                <div>
+                  <span className="font-medium text-slate-900">Phone:</span>{' '}
+                  {order.dispatchPanel.currentAssignment.courier.phone}
+                </div>
+                <div>
+                  <span className="font-medium text-slate-900">Availability:</span>{' '}
+                  {order.dispatchPanel.currentAssignment.courier.availabilityStatus ??
+                    '-'}
+                </div>
+                <div>
+                  <span className="font-medium text-slate-900">Ride:</span>{' '}
+                  {order.dispatchPanel.currentAssignment.ride?.id ?? '-'}
                 </div>
               </div>
+            ) : (
+              <p className="mt-4 text-sm text-slate-500">
+                No courier assigned yet.
+              </p>
+            )}
 
-              <div>
-                <div className="text-sm text-slate-500">Ride Status</div>
-                <div className="mt-1 text-slate-900">{order.ride.status}</div>
-              </div>
+            <div className="mt-6 space-y-3">
+              <form action={triggerAutoAssign.bind(null, order.id)}>
+                <button
+                  type="submit"
+                  className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white hover:bg-slate-800"
+                >
+                  Auto Assign
+                </button>
+              </form>
 
-              <div>
-                <div className="text-sm text-slate-500">Ride Started</div>
-                <div className="mt-1 text-slate-900">
-                  {formatDate(order.ride.startedAt)}
-                </div>
-              </div>
+              <form action={triggerApproveAutoAssign.bind(null, order.id)}>
+                <button
+                  type="submit"
+                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-50"
+                >
+                  Approve Auto Assign
+                </button>
+              </form>
 
-              <div>
-                <div className="text-sm text-slate-500">Ride Ended</div>
-                <div className="mt-1 text-slate-900">
-                  {formatDate(order.ride.endedAt)}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4">
-              <Link
-                href={`/rides/${order.ride.id}`}
-                className="inline-flex rounded-lg bg-black px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+              <form
+                action={triggerRejectRecommendation.bind(
+                  null,
+                  order.id,
+                  recommendedCourier?.courier.id,
+                )}
               >
-                View Ride Detail
-              </Link>
+                <button
+                  type="submit"
+                  className="w-full rounded-xl border border-red-300 bg-white px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-50"
+                >
+                  Reject Current Recommendation
+                </button>
+              </form>
             </div>
           </div>
-        ) : null}
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
+            <h2 className="text-lg font-semibold text-slate-900">
+              Recommended Courier
+            </h2>
+
+            {recommendedCourier ? (
+              <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">
+                      {recommendedCourier.courier.name}
+                    </div>
+                    <div className="mt-1 text-sm text-slate-600">
+                      {recommendedCourier.courier.phone}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-slate-500">Score</div>
+                    <div className="text-2xl font-bold text-emerald-700">
+                      {recommendedCourier.recommendationScore}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3 text-sm text-slate-700">
+                  <div>
+                    <span className="font-medium text-slate-900">Delivered Today:</span>{' '}
+                    {recommendedCourier.dailyStats.deliveredCountToday}
+                  </div>
+                  <div>
+                    <span className="font-medium text-slate-900">Route Distance Today:</span>{' '}
+                    {recommendedCourier.dailyStats.totalRouteDistanceMetersToday} m
+                  </div>
+                  <div>
+                    <span className="font-medium text-slate-900">ETA:</span>{' '}
+                    {recommendedCourier.metrics.estimatedPickupEtaMinutes ?? '-'} min
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-xl bg-white p-4 text-sm text-slate-700">
+                  <div className="font-medium text-slate-900 mb-2">
+                    Why selected
+                  </div>
+                  <div>
+                    Based on:{' '}
+                    {recommendedCourier.metrics.recommendationReason?.basedOn ?? '-'}
+                  </div>
+                  <div>
+                    Has fresh location:{' '}
+                    {recommendedCourier.metrics.recommendationReason?.hasFreshLocation
+                      ? 'Yes'
+                      : 'No'}
+                  </div>
+                  <div>
+                    Online:{' '}
+                    {recommendedCourier.metrics.recommendationReason?.online
+                      ? 'Yes'
+                      : 'No'}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-slate-500">
+                No recommendation available.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Candidate Couriers
+          </h2>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-100 text-slate-600">
+                <tr>
+                  <th className="px-4 py-3 text-left">Courier</th>
+                  <th className="px-4 py-3 text-left">Delivered Today</th>
+                  <th className="px-4 py-3 text-left">Route Distance</th>
+                  <th className="px-4 py-3 text-left">ETA</th>
+                  <th className="px-4 py-3 text-left">Constraints</th>
+                  <th className="px-4 py-3 text-left">Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                {candidates.map((candidate) => (
+                  <tr
+                    key={candidate.courier.id}
+                    className="border-t border-slate-200"
+                  >
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-900">
+                        {candidate.courier.name}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {candidate.courier.phone}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {candidate.dailyStats.deliveredCountToday}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {candidate.dailyStats.totalRouteDistanceMetersToday} m
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {candidate.metrics.estimatedPickupEtaMinutes ?? '-'} min
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {candidate.constraints.valid
+                        ? 'Valid'
+                        : candidate.constraints.reasons.join(', ')}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      {candidate.recommendationScore}
+                    </td>
+                  </tr>
+                ))}
+
+                {candidates.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      className="px-4 py-8 text-center text-slate-500"
+                    >
+                      No candidates found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Dispatch History
+          </h2>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-100 text-slate-600">
+                <tr>
+                  <th className="px-4 py-3 text-left">Status</th>
+                  <th className="px-4 py-3 text-left">Recommended Courier</th>
+                  <th className="px-4 py-3 text-left">Reason</th>
+                  <th className="px-4 py-3 text-left">Created At</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dispatchLogs.map((log) => (
+                  <tr key={log.id} className="border-t border-slate-200">
+                    <td className="px-4 py-3 text-slate-700">{log.status}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {log.recommendedCourier
+                        ? `${log.recommendedCourier.name} (${log.recommendedCourier.phone})`
+                        : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {log.reason ?? '-'}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {formatDate(log.createdAt)}
+                    </td>
+                  </tr>
+                ))}
+
+                {dispatchLogs.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className="px-4 py-8 text-center text-slate-500"
+                    >
+                      No dispatch logs found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Batch Suggestions
+          </h2>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-100 text-slate-600">
+                <tr>
+                  <th className="px-4 py-3 text-left">Order</th>
+                  <th className="px-4 py-3 text-left">Status</th>
+                  <th className="px-4 py-3 text-left">Pickup Distance</th>
+                  <th className="px-4 py-3 text-left">Dropoff Distance</th>
+                  <th className="px-4 py-3 text-left">Avg Distance</th>
+                  <th className="px-4 py-3 text-left">Batch Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                {suggestions.map((suggestion) => (
+                  <tr
+                    key={suggestion.order.id}
+                    className="border-t border-slate-200"
+                  >
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-900">
+                        {suggestion.order.externalRef ?? suggestion.order.id}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {suggestion.order.id}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {suggestion.order.status}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {suggestion.metrics.pickupDistanceM}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {suggestion.metrics.dropoffDistanceM}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {suggestion.metrics.averageDistanceM}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      {suggestion.batchScore}
+                    </td>
+                  </tr>
+                ))}
+
+                {suggestions.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      className="px-4 py-8 text-center text-slate-500"
+                    >
+                      No batch suggestions found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </main>
   );

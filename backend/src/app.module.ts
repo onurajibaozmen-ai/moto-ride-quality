@@ -4,8 +4,8 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { RidesModule } from './rides/rides.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
-import { DashboardModule } from './dashboard/dashboard.module';
 import { OrdersModule } from './orders/orders.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -14,8 +14,8 @@ import { OrdersModule } from './orders/orders.module';
     UsersModule,
     RidesModule,
     TelemetryModule,
-    DashboardModule,
     OrdersModule,
+    DashboardModule,
   ],
 })
 export class AppModule {}

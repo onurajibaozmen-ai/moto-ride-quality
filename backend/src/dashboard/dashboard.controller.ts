@@ -10,53 +10,29 @@ export class DashboardController {
     return this.dashboardService.getOverview();
   }
 
-  @Get('leaderboard')
-  getLeaderboard(@Query('limit') limit?: string) {
-    return this.dashboardService.getLeaderboard(limit ? Number(limit) : 20);
-  }
-
   @Get('rides')
   getRides(
     @Query('status') status?: string,
-    @Query('userId') userId?: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
+    @Query('courierId') courierId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
     return this.dashboardService.getRides({
       status,
-      userId,
-      from,
-      to,
-      page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 20,
+      courierId,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
     });
   }
 
-  @Get('rides/:id/detail')
+  @Get('rides/:id')
   getRideDetail(@Param('id') id: string) {
     return this.dashboardService.getRideDetail(id);
   }
 
-  @Get('couriers')
-  getCouriers() {
-    return this.dashboardService.getCouriers();
-  }
-
-  @Get('couriers/:id/score')
-  getCourierScore(@Param('id') id: string) {
-    return this.dashboardService.getCourierScore(id);
-  }
-
-  @Get('pilot-summary')
-  getPilotSummary() {
-    return this.dashboardService.getPilotSummary();
-  }
-
-  @Get('orders/overview')
-  getOrdersOverview() {
-    return this.dashboardService.getOrdersOverview();
+  @Get('rides/:id/plan')
+  getRidePlan(@Param('id') id: string) {
+    return this.dashboardService.getRidePlan(id);
   }
 
   @Get('orders')
@@ -71,13 +47,61 @@ export class DashboardController {
       status,
       courierId,
       rideId,
-      page: page ? Number(page) : 1,
-      limit: limit ? Number(limit) : 20,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
     });
   }
 
   @Get('orders/:id')
-  getOrderById(@Param('id') id: string) {
-    return this.dashboardService.getOrderById(id);
+  getOrderDetail(@Param('id') id: string) {
+    return this.dashboardService.getOrderDetail(id);
+  }
+
+  @Get('orders/:id/dispatch-panel')
+  getDispatchPanel(@Param('id') id: string) {
+    return this.dashboardService.getDispatchPanel(id);
+  }
+
+  @Get('couriers')
+  getCouriers(
+    @Query('availabilityStatus') availabilityStatus?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.dashboardService.getCouriers({
+      availabilityStatus,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  @Get('couriers/:id/scoring')
+  getCourierScoring(@Param('id') id: string) {
+    return this.dashboardService.getCourierScoring(id);
+  }
+
+  @Get('dispatch/queue')
+  getDispatchQueue() {
+    return this.dashboardService.getDispatchQueue();
+  }
+
+  @Get('dispatch/trigger-check')
+  getDispatchTriggerCheck() {
+    return this.dashboardService.getDispatchTriggerCheck();
+  }
+
+  @Get('dispatch/logs')
+  getDispatchLogs(
+    @Query('status') status?: string,
+    @Query('orderId') orderId?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.dashboardService.getDispatchLogs({
+      status,
+      orderId,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    });
   }
 }
