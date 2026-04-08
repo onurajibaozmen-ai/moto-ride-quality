@@ -559,7 +559,7 @@ export class OrdersService {
     });
   }
 
-  async markDelivered(orderId: string) {
+  async markDelivered(orderId: string, payload?: { note?: string }) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
@@ -579,6 +579,7 @@ export class OrdersService {
           status: OrderStatus.DELIVERED,
           deliveredAt: new Date(),
           actualDeliveryTime: new Date(),
+          deliveryNote: payload?.note ?? null,
         },
         include: {
           courier: true,
@@ -595,6 +596,61 @@ export class OrdersService {
 
       return updatedOrder;
     });
+  }
+
+  async getNextStopForCourier(courierId: string) {
+    const courier = await this.prisma.user.findFirst({
+      where: {
+        id: courierId,
+        role: UserRole.COURIER,
+      },
+    });
+
+    if (!courier) {
+      throw new NotFoundException('Courier not found');
+    }
+
+    const ride = await this.prisma.ride.findFirst({
+      where: {
+        userId: courierId,
+        status: RideStatus.ACTIVE,
+      },
+      include: {
+        orders: {
+          orderBy: {
+            createdAt: 'asc',
+          },
+        },
+      },
+    });
+
+    if (!ride) {
+      return null;
+    }
+
+    const nextOrder = ride.orders.find(
+      (order) =>
+        order.status === OrderStatus.ASSIGNED ||
+        order.status === OrderStatus.PICKED_UP,
+    );
+
+    if (!nextOrder) {
+      return null;
+    }
+
+    const type =
+      nextOrder.status === OrderStatus.ASSIGNED ? 'pickup' : 'dropoff';
+
+    return {
+      courierId,
+      rideId: ride.id,
+      orderId: nextOrder.id,
+      externalRef: nextOrder.externalRef ?? null,
+      type,
+      lat: type === 'pickup' ? nextOrder.pickupLat : nextOrder.dropoffLat,
+      lng: type === 'pickup' ? nextOrder.pickupLng : nextOrder.dropoffLng,
+      availabilityStatus: courier.availabilityStatus,
+    };
   }
 
   async getRidePlan(rideId: string) {

@@ -73,3 +73,13 @@ export async function bulkAutoAssign(limit = 10) {
     body: JSON.stringify({ limit }),
   });
 }
+
+export async function manualAssignOrder(
+  orderId: string,
+  body: { courierId: string; rideId?: string },
+) {
+  return apiFetch(`/orders/${orderId}/assign`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}

@@ -1,7 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   CourierAvailabilityStatus,
-  DispatchDecisionStatus,
   OrderStatus,
   RideStatus,
   UserRole,
@@ -491,7 +490,7 @@ export class DashboardService {
           orderBy: {
             startedAt: 'desc',
           },
-          take: 20,
+          take: 50,
           include: {
             orders: true,
           },
@@ -503,9 +502,6 @@ export class DashboardService {
       throw new NotFoundException('Courier not found');
     }
 
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-
     const deliveredOrders = await this.prisma.order.findMany({
       where: {
         assignedCourierId: courierId,
@@ -514,14 +510,15 @@ export class DashboardService {
       orderBy: {
         deliveredAt: 'desc',
       },
-      take: 100,
+      take: 200,
       select: {
         id: true,
         externalRef: true,
-        estimatedPickupTime: true,
+        status: true,
         estimatedDeliveryTime: true,
-        actualPickupTime: true,
         actualDeliveryTime: true,
+        estimatedPickupTime: true,
+        actualPickupTime: true,
         pickupLat: true,
         pickupLng: true,
         dropoffLat: true,
@@ -530,52 +527,231 @@ export class DashboardService {
       },
     });
 
-    const deliveredToday = deliveredOrders.filter(
-      (order) => order.deliveredAt && order.deliveredAt >= startOfDay,
+    const completedRides = courier.rides.filter(
+      (ride) => ride.status === RideStatus.COMPLETED,
     );
 
-    const totalRouteDistanceMetersToday = deliveredToday.reduce(
-      (sum, order) =>
-        sum +
-        this.calculateDistanceMeters(
-          order.pickupLat,
-          order.pickupLng,
-          order.dropoffLat,
-          order.dropoffLng,
-        ),
+    const completedRideCount = completedRides.length;
+    const totalAssignedOrders = courier.rides.reduce(
+      (sum, ride) => sum + ride.orders.length,
       0,
     );
+    const totalDeliveredOrders = deliveredOrders.length;
 
-    const analytics = {
-      totalRides: courier.rides.length,
-      activeRideCount: courier.rides.filter((r) => r.status === RideStatus.ACTIVE)
-        .length,
-      totalDeliveredOrders: deliveredOrders.length,
-      deliveredCountToday: deliveredToday.length,
-      totalRouteDistanceMetersToday: Number(
-        totalRouteDistanceMetersToday.toFixed(2),
-      ),
-      onTimePickupCount: deliveredOrders.filter((order) => {
-        if (!order.estimatedPickupTime || !order.actualPickupTime) return false;
-        return order.actualPickupTime.getTime() <= order.estimatedPickupTime.getTime();
-      }).length,
-      onTimeDeliveryCount: deliveredOrders.filter((order) => {
-        if (!order.estimatedDeliveryTime || !order.actualDeliveryTime) return false;
-        return order.actualDeliveryTime.getTime() <= order.estimatedDeliveryTime.getTime();
-      }).length,
-    };
+    const onTimeDeliveredOrders = deliveredOrders.filter((order) => {
+      if (!order.estimatedDeliveryTime || !order.actualDeliveryTime) return false;
+      return (
+        order.actualDeliveryTime.getTime() <= order.estimatedDeliveryTime.getTime()
+      );
+    }).length;
+
+    const onTimeDeliveryRate =
+      totalDeliveredOrders > 0
+        ? (onTimeDeliveredOrders / totalDeliveredOrders) * 100
+        : null;
+
+    const rideScores = completedRides
+      .map((ride) => ride.score)
+      .filter((score): score is number => typeof score === 'number');
+
+    const averageRideScore =
+      rideScores.length > 0
+        ? rideScores.reduce((sum, score) => sum + score, 0) / rideScores.length
+        : null;
+
+    const deliveryDelayValues = deliveredOrders
+      .map((order) => {
+        if (!order.estimatedDeliveryTime || !order.actualDeliveryTime) return null;
+        return Math.round(
+          (order.actualDeliveryTime.getTime() -
+            order.estimatedDeliveryTime.getTime()) /
+            1000,
+        );
+      })
+      .filter((value): value is number => value !== null);
+
+    const averageDeliveryDelaySeconds =
+      deliveryDelayValues.length > 0
+        ? deliveryDelayValues.reduce((sum, value) => sum + value, 0) /
+          deliveryDelayValues.length
+        : null;
+
+    const deliveredOrdersPerRide =
+      completedRideCount > 0 ? totalDeliveredOrders / completedRideCount : null;
+
+    const multiOrderRideCount = completedRides.filter(
+      (ride) => ride.orders.length > 1,
+    ).length;
+
+    const multiOrderRate =
+      completedRideCount > 0
+        ? (multiOrderRideCount / completedRideCount) * 100
+        : null;
+
+    const averageOrdersPerRide =
+      courier.rides.length > 0 ? totalAssignedOrders / courier.rides.length : null;
+
+    const drivingScore =
+      averageRideScore !== null
+        ? Math.max(0, Math.min(100, averageRideScore))
+        : null;
+
+    const punctualityScore =
+      onTimeDeliveryRate !== null
+        ? Math.max(0, Math.min(100, onTimeDeliveryRate))
+        : null;
+
+    let deliveryEfficiencyScore: number | null = null;
+    if (averageDeliveryDelaySeconds !== null) {
+      const maxPenaltyWindowSeconds = 30 * 60;
+      const normalized =
+        100 -
+        (Math.max(0, averageDeliveryDelaySeconds) / maxPenaltyWindowSeconds) *
+          100;
+      deliveryEfficiencyScore = Math.max(0, Math.min(100, normalized));
+    }
+
+    let multiOrderScore: number | null = null;
+    if (multiOrderRate !== null) {
+      multiOrderScore = Math.max(0, Math.min(100, multiOrderRate));
+    }
+
+    const scoreParts = [
+      drivingScore,
+      punctualityScore,
+      deliveryEfficiencyScore,
+      multiOrderScore,
+    ].filter((v): v is number => typeof v === 'number');
+
+    const overallScore =
+      scoreParts.length > 0
+        ? scoreParts.reduce((sum, v) => sum + v, 0) / scoreParts.length
+        : null;
+
+    const recentRides = courier.rides.map((ride) => ({
+      id: ride.id,
+      startedAt: ride.startedAt,
+      endedAt: ride.endedAt,
+      status: ride.status,
+      score: ride.score,
+      totalDistanceM: null,
+      durationS:
+        ride.startedAt && ride.endedAt
+          ? Math.round(
+              (ride.endedAt.getTime() - ride.startedAt.getTime()) / 1000,
+            )
+          : null,
+    }));
+
+    const recentOrders = deliveredOrders.map((order) => {
+      let deliveryDelaySeconds: number | null = null;
+
+      if (order.estimatedDeliveryTime && order.actualDeliveryTime) {
+        deliveryDelaySeconds = Math.round(
+          (order.actualDeliveryTime.getTime() -
+            order.estimatedDeliveryTime.getTime()) /
+            1000,
+        );
+      }
+
+      let deliveryEtaStatus = 'unknown';
+      if (deliveryDelaySeconds === null) deliveryEtaStatus = 'unknown';
+      else if (deliveryDelaySeconds > 0) deliveryEtaStatus = 'late';
+      else if (deliveryDelaySeconds < 0) deliveryEtaStatus = 'early';
+      else deliveryEtaStatus = 'on_time';
+
+      return {
+        id: order.id,
+        externalRef: order.externalRef,
+        status: order.status,
+        estimatedDeliveryTime: order.estimatedDeliveryTime,
+        actualDeliveryTime: order.actualDeliveryTime,
+        metrics: {
+          deliveryDelaySeconds,
+          deliveryEtaStatus,
+          onTimeDelivery:
+            deliveryDelaySeconds === null ? null : deliveryDelaySeconds <= 0,
+        },
+      };
+    });
 
     return {
       courier: {
         id: courier.id,
         name: courier.name,
         phone: courier.phone,
+        role: courier.role,
         isActive: courier.isActive,
         lastSeenAt: courier.lastSeenAt,
         availabilityStatus: courier.availabilityStatus,
         availabilityUpdatedAt: courier.availabilityUpdatedAt,
       },
-      analytics,
+      summary: {
+        totalCompletedRides: completedRideCount,
+        totalAssignedOrders,
+        totalDeliveredOrders,
+        onTimeDeliveredOrders,
+        onTimeDeliveryRate,
+        averageRideScore,
+        averageDeliveryDelaySeconds,
+        deliveredOrdersPerRide,
+        multiOrderRideCount,
+        multiOrderRate,
+        averageOrdersPerRide,
+      },
+      score: {
+        drivingScore,
+        punctualityScore,
+        deliveryEfficiencyScore,
+        multiOrderScore,
+        overallScore,
+        version: 'm16_scoring_v1',
+      },
+      recent: {
+        rides: recentRides,
+        orders: recentOrders,
+      },
+
+      analytics: {
+        totalRides: courier.rides.length,
+        activeRideCount: courier.rides.filter((r) => r.status === RideStatus.ACTIVE)
+          .length,
+        totalDeliveredOrders,
+        deliveredCountToday: deliveredOrders.filter((order) => {
+          if (!order.deliveredAt) return false;
+          const startOfDay = new Date();
+          startOfDay.setHours(0, 0, 0, 0);
+          return order.deliveredAt >= startOfDay;
+        }).length,
+        totalRouteDistanceMetersToday: Number(
+          deliveredOrders
+            .filter((order) => {
+              if (!order.deliveredAt) return false;
+              const startOfDay = new Date();
+              startOfDay.setHours(0, 0, 0, 0);
+              return order.deliveredAt >= startOfDay;
+            })
+            .reduce(
+              (sum, order) =>
+                sum +
+                this.calculateDistanceMeters(
+                  order.pickupLat,
+                  order.pickupLng,
+                  order.dropoffLat,
+                  order.dropoffLng,
+                ),
+              0,
+            )
+            .toFixed(2),
+        ),
+        onTimePickupCount: deliveredOrders.filter((order) => {
+          if (!order.estimatedPickupTime || !order.actualPickupTime) return false;
+          return (
+            order.actualPickupTime.getTime() <= order.estimatedPickupTime.getTime()
+          );
+        }).length,
+        onTimeDeliveryCount: onTimeDeliveredOrders,
+      },
       recentRides: courier.rides.map((ride) => ({
         id: ride.id,
         status: ride.status,

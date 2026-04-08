@@ -212,6 +212,7 @@ model Order {
   dropoffLng   Float
   status       OrderStatus           @default(PENDING)
   dispatchLogs DispatchDecisionLog[]
+  deliveryNote String?
 
   assignedCourierId String?
   rideId            String?

@@ -94,20 +94,30 @@ export default async function CouriersPage() {
                   <th className="px-4 py-3 text-left">Assignable</th>
                   <th className="px-4 py-3 text-left">Delivered Today</th>
                   <th className="px-4 py-3 text-left">Route Distance Today</th>
+                  <th className="px-4 py-3 text-left">Open Orders</th>
                   <th className="px-4 py-3 text-left">Active Ride</th>
                   <th className="px-4 py-3 text-left">Last Seen</th>
+                  <th className="px-4 py-3 text-left">Latest Telemetry</th>
                   <th className="px-4 py-3 text-left">Scoring</th>
                 </tr>
               </thead>
               <tbody>
                 {couriers.map((courier) => (
                   <tr key={courier.id} className="border-t border-slate-200">
-                    <td className="px-4 py-3 font-medium text-slate-900">
-                      {courier.name}
+                    <td className="px-4 py-3">
+                      <Link
+                        href={`/couriers/${courier.id}`}
+                        className="font-medium text-slate-900 hover:text-blue-600 hover:underline"
+                      >
+                        {courier.name}
+                      </Link>
+                      <div className="text-xs text-slate-500">{courier.id}</div>
                     </td>
+
                     <td className="px-4 py-3 text-slate-700">
                       {courier.phone}
                     </td>
+
                     <td className="px-4 py-3">
                       <span
                         className={`rounded-full px-2 py-1 text-xs font-medium ${availabilityBadgeClass(
@@ -117,21 +127,61 @@ export default async function CouriersPage() {
                         {courier.availabilityStatus ?? 'OFFLINE'}
                       </span>
                     </td>
+
                     <td className="px-4 py-3 text-slate-700">
                       {courier.dispatch?.isAssignable ? 'Yes' : 'No'}
                     </td>
+
                     <td className="px-4 py-3 text-slate-700">
                       {courier.dailyStats?.deliveredCountToday ?? 0}
                     </td>
+
                     <td className="px-4 py-3 text-slate-700">
                       {courier.dailyStats?.totalRouteDistanceMetersToday ?? 0} m
                     </td>
+
                     <td className="px-4 py-3 text-slate-700">
-                      {courier.activeRide?.id ?? '-'}
+                      {courier.dispatch?.openOrderCount ??
+                        courier.activeRide?.openOrderCount ??
+                        courier.activeRide?.orderCount ??
+                        0}
                     </td>
+
+                    <td className="px-4 py-3 text-slate-700">
+                      {courier.activeRide ? (
+                        <div>
+                          <div className="font-medium text-slate-900">
+                            {courier.activeRide.id}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {courier.activeRide.status}
+                          </div>
+                        </div>
+                      ) : (
+                        '-'
+                      )}
+                    </td>
+
                     <td className="px-4 py-3 text-slate-700">
                       {formatDate(courier.lastSeenAt)}
                     </td>
+
+                    <td className="px-4 py-3 text-slate-700">
+                      {courier.latestTelemetry ? (
+                        <div>
+                          <div>
+                            {courier.latestTelemetry.lat.toFixed(5)},{' '}
+                            {courier.latestTelemetry.lng.toFixed(5)}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {formatDate(courier.latestTelemetry.ts)}
+                          </div>
+                        </div>
+                      ) : (
+                        '-'
+                      )}
+                    </td>
+
                     <td className="px-4 py-3">
                       <Link
                         href={`/couriers/${courier.id}/scoring`}
@@ -146,7 +196,7 @@ export default async function CouriersPage() {
                 {couriers.length === 0 && (
                   <tr>
                     <td
-                      colSpan={9}
+                      colSpan={11}
                       className="px-4 py-8 text-center text-slate-500"
                     >
                       No couriers found.

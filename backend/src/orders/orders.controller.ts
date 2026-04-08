@@ -82,6 +82,11 @@ export class OrdersController {
     });
   }
 
+  @Get('couriers/:id/next-stop')
+  getNextStop(@Param('id') id: string) {
+    return this.ordersService.getNextStopForCourier(id);
+  }
+
   @Get(':id')
   getOrderById(@Param('id') id: string) {
     return this.ordersService.getOrderById(id);
@@ -107,8 +112,11 @@ export class OrdersController {
   }
 
   @Patch(':id/deliver')
-  markDelivered(@Param('id') id: string) {
-    return this.ordersService.markDelivered(id);
+  markDelivered(
+    @Param('id') id: string,
+    @Body() body?: { note?: string },
+  ) {
+    return this.ordersService.markDelivered(id, body);
   }
 
   @Get(':id/recommend-courier')

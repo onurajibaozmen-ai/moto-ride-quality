@@ -2,48 +2,91 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-class TelemetryQueue {
-  static const _storageKey = 'telemetry_batch_queue';
+import 'telemetry_api.dart';
 
-  Future<List<Map<String, dynamic>>> loadQueue() async {
+class TelemetryQueue {
+  static const String _storageKey = 'telemetry_queue_v1';
+
+  final TelemetryApi telemetryApi;
+
+  TelemetryQueue(this.telemetryApi);
+
+  Future<List<Map<String, dynamic>>> readQueue() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_storageKey);
 
     if (raw == null || raw.isEmpty) {
-      return [];
+      return <Map<String, dynamic>>[];
     }
 
-    final decoded = jsonDecode(raw);
+    try {
+      final parsed = jsonDecode(raw);
+      if (parsed is List) {
+        return parsed
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+    } catch (_) {}
 
-    if (decoded is! List) {
-      return [];
-    }
-
-    return decoded
-        .whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item))
-        .toList();
+    return <Map<String, dynamic>>[];
   }
 
-  Future<void> saveQueue(List<Map<String, dynamic>> items) async {
+  Future<void> writeQueue(List<Map<String, dynamic>> items) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_storageKey, jsonEncode(items));
   }
 
-  Future<void> enqueue(Map<String, dynamic> item) async {
-    final queue = await loadQueue();
-    queue.add(item);
-    await saveQueue(queue);
+  Future<void> enqueue(Map<String, dynamic> point) async {
+    final queue = await readQueue();
+    queue.add(point);
+    await writeQueue(queue);
   }
 
-  Future<void> removeByBatchId(String clientBatchId) async {
-    final queue = await loadQueue();
-    queue.removeWhere((item) => item['clientBatchId'] == clientBatchId);
-    await saveQueue(queue);
+  Future<void> trackPoint({
+    required String courierId,
+    String? rideId,
+    required Map<String, dynamic> point,
+  }) async {
+    try {
+      await telemetryApi.sendBatch(
+        courierId: courierId,
+        rideId: rideId,
+        points: [point],
+      );
+
+      await flush(
+        courierId: courierId,
+        rideId: rideId,
+      );
+    } catch (_) {
+      await enqueue(point);
+    }
   }
 
-  Future<void> clear() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_storageKey);
+  Future<int> flush({
+    required String courierId,
+    String? rideId,
+  }) async {
+    final queue = await readQueue();
+
+    if (queue.isEmpty) return 0;
+
+    final batch = queue.take(50).toList();
+
+    try {
+      await telemetryApi.sendBatch(
+        courierId: courierId,
+        rideId: rideId,
+        points: batch,
+      );
+
+      final remaining = queue.skip(batch.length).toList();
+      await writeQueue(remaining);
+
+      return batch.length;
+    } catch (_) {
+      return 0;
+    }
   }
 }

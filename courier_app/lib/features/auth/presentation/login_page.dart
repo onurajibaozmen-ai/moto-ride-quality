@@ -50,14 +50,18 @@ class _LoginPageState extends State<LoginPage> {
       await AuthManager.instance.setToken(
         token,
         user: response['user'] is Map
-          ? Map<String, dynamic>.from(2response['user'])
+          ? Map<String, dynamic>.from(response['user'])
           : null,
       );
 
       if (!mounted) return;
 
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const HomePage()),
+        MaterialPageRoute(
+          builder: (_) => HomePage(
+            courierId: Map<String, dynamic>.from(response['user'])['id'].toString(),
+          ),
+        ),
         (_) => false,
       );
     } catch (e) {

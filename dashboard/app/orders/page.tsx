@@ -73,11 +73,28 @@ export default async function OrdersPage() {
   return (
     <main className="min-h-screen bg-slate-50 p-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">Orders</h1>
-          <p className="mt-2 text-slate-600">
-            Sipariş operasyonları ve dispatch görünümü.
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">Orders</h1>
+            <p className="mt-2 text-slate-600">
+              Sipariş operasyonları ve dispatch görünümü.
+            </p>
+          </div>
+
+          <div className="flex gap-3">
+            <Link
+              href="/dispatch/queue"
+              className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-50"
+            >
+              Dispatch Queue
+            </Link>
+            <Link
+              href="/dispatch/logs"
+              className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-50"
+            >
+              Dispatch Logs
+            </Link>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
@@ -124,7 +141,7 @@ export default async function OrdersPage() {
                   <th className="px-4 py-3 text-left">Ride</th>
                   <th className="px-4 py-3 text-left">Est. Delivery</th>
                   <th className="px-4 py-3 text-left">Actual Delivery</th>
-                  <th className="px-4 py-3 text-left">Dispatch</th>
+                  <th className="px-4 py-3 text-left">Dispatch UX</th>
                 </tr>
               </thead>
               <tbody>
@@ -154,7 +171,7 @@ export default async function OrdersPage() {
                         href={`/orders/${order.id}`}
                         className="text-blue-600 hover:underline"
                       >
-                        View dispatch panel
+                        Explain / Compare / Assign
                       </Link>
                     </td>
                   </tr>

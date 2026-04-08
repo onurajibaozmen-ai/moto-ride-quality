@@ -1,90 +1,76 @@
-import 'package:dio/dio.dart';
-import 'package:courier_app/core/network/api_client.dart';
+import 'dart:convert';
+
+import '../../../core/network/api_client.dart';
 
 class OrdersApi {
-  final Dio _dio = ApiClient.dio;
-
-  Map<String, dynamic>? _safeMap(dynamic data) {
-    if (data == null) return null;
-
-    if (data is Map<String, dynamic>) {
-      return data;
-    }
-
-    if (data is Map) {
-      return Map<String, dynamic>.from(data);
-    }
-
-    return null;
+  Future<Map<String, dynamic>> getAssignedOrders() async {
+    final response = await ApiClient.dio.get('/orders');
+    return _decode(response.data);
   }
 
-  List<Map<String, dynamic>> _safeList(dynamic data) {
-    if (data is! List) return [];
-
-    return data
-        .whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item))
-        .toList();
-  }
-
-  Future<List<Map<String, dynamic>>> getOrders({
-    String? courierId,
-    String? rideId,
-    String? status,
-  }) async {
-    final response = await _dio.get(
-      '/orders',
-      queryParameters: {
-        if (courierId != null && courierId.isNotEmpty) 'courierId': courierId,
-        if (rideId != null && rideId.isNotEmpty) 'rideId': rideId,
-        if (status != null && status.isNotEmpty) 'status': status,
+  Future<Map<String, dynamic>> startRide(String courierId) async {
+    final response = await ApiClient.dio.post(
+      '/rides/start',
+      data: {
+        'courierId': courierId,
       },
     );
-
-    final map = _safeMap(response.data);
-    if (map == null) {
-      throw Exception('orders response is not a JSON object: ${response.data}');
-    }
-
-    return _safeList(map['items']);
+    return _decode(response.data);
   }
 
-  Future<Map<String, dynamic>> getRidePlan(String rideId) async {
-    final response = await _dio.get('/orders/ride/$rideId/plan');
-
-    final data = _safeMap(response.data);
-    if (data == null) {
-      throw Exception(
-        'ride plan response is not a JSON object: ${response.data}',
-      );
-    }
-
-    return data;
+  Future<Map<String, dynamic>> endRide(String rideId) async {
+    final response = await ApiClient.dio.patch(
+      '/rides/$rideId/end',
+      data: {},
+    );
+    return _decode(response.data);
   }
 
-  Future<Map<String, dynamic>> markPickedUp(String orderId) async {
-    final response = await _dio.patch('/orders/$orderId/pickup');
-
-    final data = _safeMap(response.data);
-    if (data == null) {
-      throw Exception(
-        'pickup response is not a JSON object: ${response.data}',
-      );
-    }
-
-    return data;
+  Future<Map<String, dynamic>> pickupOrder(String orderId) async {
+    final response = await ApiClient.dio.patch(
+      '/orders/$orderId/pickup',
+      data: {},
+    );
+    return _decode(response.data);
   }
 
-  Future<Map<String, dynamic>> markDelivered(String orderId) async {
-    final response = await _dio.patch('/orders/$orderId/deliver');
+  Future<Map<String, dynamic>> deliverOrder(
+    String orderId, {
+    String? note,
+  }) async {
+    final response = await ApiClient.dio.patch(
+      '/orders/$orderId/deliver',
+      data: {
+        'note': note ?? '',
+      },
+    );
+    return _decode(response.data);
+  }
 
-    final data = _safeMap(response.data);
-    if (data == null) {
-      throw Exception(
-        'deliver response is not a JSON object: ${response.data}',
-      );
+  Future<Map<String, dynamic>?> getNextStop(String courierId) async {
+    final response = await ApiClient.dio.get(
+      '/orders/couriers/$courierId/next-stop',
+    );
+
+    final decoded = _decode(response.data);
+
+    if (decoded.isEmpty) return null;
+    return decoded;
+  }
+
+  Map<String, dynamic> _decode(dynamic response) {
+    if (response is Map<String, dynamic>) return response;
+
+    if (response is Map) {
+      return Map<String, dynamic>.from(response);
     }
 
-    return data;
+    if (response is String && response.isNotEmpty) {
+      final parsed = jsonDecode(response);
+      if (parsed is Map<String, dynamic>) return parsed;
+      if (parsed is Map) return Map<String, dynamic>.from(parsed);
+    }
+
+    return <String, dynamic>{};
   }
 }

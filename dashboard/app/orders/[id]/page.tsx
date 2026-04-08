@@ -3,6 +3,7 @@ import {
   apiFetch,
   approveAutoAssign,
   autoAssignOrder,
+  manualAssignOrder,
   rejectRecommendation,
 } from '@/lib/api';
 
@@ -175,6 +176,20 @@ function formatDate(value?: string | null) {
   return new Date(value).toLocaleString();
 }
 
+function formatMeters(value?: number | null) {
+  if (value === null || value === undefined) return '-';
+  return `${value} m`;
+}
+
+function formatMinutes(value?: number | null) {
+  if (value === null || value === undefined) return '-';
+  return `${value} min`;
+}
+
+function yesNo(value?: boolean) {
+  return value ? 'Yes' : 'No';
+}
+
 async function getOrderDetail(id: string): Promise<OrderDetailResponse | null> {
   try {
     return await apiFetch<OrderDetailResponse>(`/dashboard/orders/${id}`);
@@ -214,6 +229,23 @@ async function triggerRejectRecommendation(orderId: string, courierId?: string) 
     });
   } catch (error) {
     console.error('Reject recommendation failed', error);
+  }
+}
+
+async function triggerManualAssign(
+  orderId: string,
+  courierId: string,
+  rideId?: string | null,
+) {
+  'use server';
+
+  try {
+    await manualAssignOrder(orderId, {
+      courierId,
+      rideId: rideId ?? undefined,
+    });
+  } catch (error) {
+    console.error('Manual assign failed', error);
   }
 }
 
@@ -398,29 +430,64 @@ export default async function OrderDetailPage({
                   </div>
                   <div>
                     <span className="font-medium text-slate-900">ETA:</span>{' '}
-                    {recommendedCourier.metrics.estimatedPickupEtaMinutes ?? '-'} min
+                    {formatMinutes(recommendedCourier.metrics.estimatedPickupEtaMinutes)}
                   </div>
                 </div>
 
                 <div className="mt-4 rounded-xl bg-white p-4 text-sm text-slate-700">
-                  <div className="font-medium text-slate-900 mb-2">
-                    Why selected
+                  <div className="font-medium text-slate-900 mb-3">
+                    Why this courier was selected
                   </div>
-                  <div>
-                    Based on:{' '}
-                    {recommendedCourier.metrics.recommendationReason?.basedOn ?? '-'}
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <div>
+                      <span className="font-medium text-slate-900">Engine:</span>{' '}
+                      {recommendedCourier.metrics.recommendationReason?.basedOn ?? '-'}
+                    </div>
+                    <div>
+                      <span className="font-medium text-slate-900">Fresh location:</span>{' '}
+                      {yesNo(
+                        recommendedCourier.metrics.recommendationReason
+                          ?.hasFreshLocation,
+                      )}
+                    </div>
+                    <div>
+                      <span className="font-medium text-slate-900">Online:</span>{' '}
+                      {yesNo(
+                        recommendedCourier.metrics.recommendationReason?.online,
+                      )}
+                    </div>
+                    <div>
+                      <span className="font-medium text-slate-900">Has active ride:</span>{' '}
+                      {yesNo(
+                        recommendedCourier.metrics.recommendationReason
+                          ?.hasActiveRide,
+                      )}
+                    </div>
+                    <div>
+                      <span className="font-medium text-slate-900">Pickup distance:</span>{' '}
+                      {formatMeters(recommendedCourier.metrics.pickupDistanceM)}
+                    </div>
+                    <div>
+                      <span className="font-medium text-slate-900">Detour:</span>{' '}
+                      {formatMeters(recommendedCourier.constraints.detourMeters)}
+                    </div>
                   </div>
-                  <div>
-                    Has fresh location:{' '}
-                    {recommendedCourier.metrics.recommendationReason?.hasFreshLocation
-                      ? 'Yes'
-                      : 'No'}
+                </div>
+
+                <div className="mt-4 rounded-xl bg-white p-4 text-sm text-slate-700">
+                  <div className="font-medium text-slate-900 mb-3">
+                    Score breakdown
                   </div>
-                  <div>
-                    Online:{' '}
-                    {recommendedCourier.metrics.recommendationReason?.online
-                      ? 'Yes'
-                      : 'No'}
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <div>Delivered count priority: {recommendedCourier.metrics.deliveredCountPriorityScore}</div>
+                    <div>Route distance priority: {recommendedCourier.metrics.routeDistancePriorityScore}</div>
+                    <div>Distance score: {recommendedCourier.metrics.distanceScore}</div>
+                    <div>Online score: {recommendedCourier.metrics.onlineScore}</div>
+                    <div>Freshness score: {recommendedCourier.metrics.freshnessScore}</div>
+                    <div>Active ride penalty: -{recommendedCourier.metrics.activeRidePenalty}</div>
+                    <div>Active ride order penalty: -{recommendedCourier.metrics.activeRideOrderPenalty}</div>
+                    <div>Stale location penalty: -{recommendedCourier.metrics.staleLocationPenalty}</div>
+                    <div>Missing location penalty: -{recommendedCourier.metrics.missingLocationPenalty}</div>
                   </div>
                 </div>
               </div>
@@ -434,7 +501,7 @@ export default async function OrderDetailPage({
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">
-            Candidate Couriers
+            Candidate Compare View
           </h2>
 
           <div className="mt-4 overflow-x-auto">
@@ -444,9 +511,13 @@ export default async function OrderDetailPage({
                   <th className="px-4 py-3 text-left">Courier</th>
                   <th className="px-4 py-3 text-left">Delivered Today</th>
                   <th className="px-4 py-3 text-left">Route Distance</th>
+                  <th className="px-4 py-3 text-left">Pickup Distance</th>
                   <th className="px-4 py-3 text-left">ETA</th>
+                  <th className="px-4 py-3 text-left">Online</th>
+                  <th className="px-4 py-3 text-left">Fresh Location</th>
                   <th className="px-4 py-3 text-left">Constraints</th>
                   <th className="px-4 py-3 text-left">Score</th>
+                  <th className="px-4 py-3 text-left">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -467,10 +538,21 @@ export default async function OrderDetailPage({
                       {candidate.dailyStats.deliveredCountToday}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {candidate.dailyStats.totalRouteDistanceMetersToday} m
+                      {formatMeters(
+                        candidate.dailyStats.totalRouteDistanceMetersToday,
+                      )}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {candidate.metrics.estimatedPickupEtaMinutes ?? '-'} min
+                      {formatMeters(candidate.metrics.pickupDistanceM)}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {formatMinutes(candidate.metrics.estimatedPickupEtaMinutes)}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {yesNo(candidate.online)}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {yesNo(candidate.location.fresh)}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       {candidate.constraints.valid
@@ -480,13 +562,30 @@ export default async function OrderDetailPage({
                     <td className="px-4 py-3 font-medium text-slate-900">
                       {candidate.recommendationScore}
                     </td>
+                    <td className="px-4 py-3">
+                      <form
+                        action={triggerManualAssign.bind(
+                          null,
+                          order.id,
+                          candidate.courier.id,
+                          candidate.activeRide?.id,
+                        )}
+                      >
+                        <button
+                          type="submit"
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-900 hover:bg-slate-50"
+                        >
+                          Assign to this candidate
+                        </button>
+                      </form>
+                    </td>
                   </tr>
                 ))}
 
                 {candidates.length === 0 && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={10}
                       className="px-4 py-8 text-center text-slate-500"
                     >
                       No candidates found.
