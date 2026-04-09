@@ -1,3 +1,4 @@
+import SimpleMap from '@/components/maps/simple-map';
 import Link from 'next/link';
 import {
   apiFetch,
@@ -6,6 +7,7 @@ import {
   manualAssignOrder,
   rejectRecommendation,
 } from '@/lib/api';
+
 
 type OrderDetailResponse = {
   id: string;
@@ -277,6 +279,23 @@ export default async function OrderDetailPage({
       </main>
     );
   }
+
+  const orderMarkers = [
+    {
+      id: 'pickup',
+      lat: order.pickupLat,
+      lng: order.pickupLng,
+      label: 'P',
+      title: 'Pickup',
+    },
+    {
+      id: 'dropoff',
+      lat: order.dropoffLat,
+      lng: order.dropoffLng,
+      label: 'D',
+      title: 'Dropoff',
+    },
+  ];
 
   const recommendation = order.dispatchPanel?.recommendation;
   const recommendedCourier = recommendation?.recommendedCourier ?? null;
@@ -594,6 +613,23 @@ export default async function OrderDetailPage({
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Order Map</h2>
+          <p className="mt-2 text-sm text-slate-600">
+            Pickup ve dropoff noktaları.
+          </p>
+
+          <div className="mt-4">
+            <SimpleMap
+              markers={orderMarkers}
+              path={[
+                { lat: order.pickupLat, lng: order.pickupLng },
+                { lat: order.dropoffLat, lng: order.dropoffLng },
+              ]}
+            />
           </div>
         </div>
 

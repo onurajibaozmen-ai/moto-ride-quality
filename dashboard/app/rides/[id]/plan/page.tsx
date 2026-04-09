@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
+import SimpleMap from '@/components/maps/simple-map';
 
 type RidePlanResponse = {
   ride: {
@@ -107,6 +108,19 @@ export default async function RidePlanPage({
     );
   }
 
+  const stopMarkers = plan.recommendedSequence.map((stop) => ({
+    id: stop.stopId,
+    lat: stop.lat,
+    lng: stop.lng,
+    label: String(stop.sequence),
+    title: `${stop.type.toUpperCase()} - ${stop.orderRef ?? stop.orderId}`,
+  }));
+
+  const stopPath = plan.recommendedSequence.map((stop) => ({
+    lat: stop.lat,
+    lng: stop.lng,
+  }));
+
   return (
     <main className="min-h-screen bg-slate-50 p-8">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -150,6 +164,19 @@ export default async function RidePlanPage({
             <div className="mt-2 text-xl font-semibold text-slate-900">
               {plan.ride.score ?? '-'}
             </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Ride Plan Map
+          </h2>
+          <p className="mt-2 text-sm text-slate-600">
+            Stop sequence harita görünümü.
+          </p>
+
+          <div className="mt-4">
+            <SimpleMap markers={stopMarkers} path={stopPath} />
           </div>
         </div>
 
