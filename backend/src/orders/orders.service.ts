@@ -610,7 +610,7 @@ export class OrdersService {
       throw new NotFoundException('Courier not found');
     }
 
-    const ride = await this.prisma.ride.findFirst({
+    const activeRide = await this.prisma.ride.findFirst({
       where: {
         userId: courierId,
         status: RideStatus.ACTIVE,
@@ -624,32 +624,66 @@ export class OrdersService {
       },
     });
 
-    if (!ride) {
-      return null;
+    if (activeRide) {
+      const nextRideOrder = activeRide.orders.find(
+        (order) =>
+          order.status === OrderStatus.ASSIGNED ||
+          order.status === OrderStatus.PICKED_UP,
+      );
+
+      if (nextRideOrder) {
+        const type =
+          nextRideOrder.status === OrderStatus.ASSIGNED ? 'pickup' : 'dropoff';
+
+        return {
+          courierId,
+          rideId: activeRide.id,
+          orderId: nextRideOrder.id,
+          externalRef: nextRideOrder.externalRef ?? null,
+          type,
+          lat:
+            type === 'pickup'
+              ? nextRideOrder.pickupLat
+              : nextRideOrder.dropoffLat,
+          lng:
+            type === 'pickup'
+              ? nextRideOrder.pickupLng
+              : nextRideOrder.dropoffLng,
+          availabilityStatus: courier.availabilityStatus,
+          source: 'active_ride',
+        };
+      }
     }
 
-    const nextOrder = ride.orders.find(
-      (order) =>
-        order.status === OrderStatus.ASSIGNED ||
-        order.status === OrderStatus.PICKED_UP,
-    );
+    const assignedOrder = await this.prisma.order.findFirst({
+      where: {
+        assignedCourierId: courierId,
+        status: {
+          in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
+        },
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
 
-    if (!nextOrder) {
+    if (!assignedOrder) {
       return null;
     }
 
     const type =
-      nextOrder.status === OrderStatus.ASSIGNED ? 'pickup' : 'dropoff';
+      assignedOrder.status === OrderStatus.ASSIGNED ? 'pickup' : 'dropoff';
 
     return {
       courierId,
-      rideId: ride.id,
-      orderId: nextOrder.id,
-      externalRef: nextOrder.externalRef ?? null,
+      rideId: assignedOrder.rideId ?? null,
+      orderId: assignedOrder.id,
+      externalRef: assignedOrder.externalRef ?? null,
       type,
-      lat: type === 'pickup' ? nextOrder.pickupLat : nextOrder.dropoffLat,
-      lng: type === 'pickup' ? nextOrder.pickupLng : nextOrder.dropoffLng,
+      lat: type === 'pickup' ? assignedOrder.pickupLat : assignedOrder.dropoffLat,
+      lng: type === 'pickup' ? assignedOrder.pickupLng : assignedOrder.dropoffLng,
       availabilityStatus: courier.availabilityStatus,
+      source: 'assigned_order_fallback',
     };
   }
 
