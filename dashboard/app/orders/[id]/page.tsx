@@ -77,14 +77,38 @@ type DispatchLogItem = {
 
 type BatchSuggestion = {
   orderId?: string;
+  order?: {
+    id: string;
+    externalRef?: string | null;
+    status?: string;
+    pickupAddress?: string | null;
+    dropoffAddress?: string | null;
+  };
   valid?: boolean;
   detour?: number;
   stopCount?: number;
   reasons?: string[];
   score?: number;
+  batchScore?: number;
+  insertionPreview?: {
+    valid?: boolean;
+    reasons?: string[];
+    projectedStopCount?: number;
+    projectedDetourMeters?: number;
+    projectedSequence?: Array<{
+      stopId: string;
+      orderId: string;
+      orderRef?: string | null;
+      type: 'pickup' | 'dropoff';
+      lat: number;
+      lng: number;
+      sequence: number;
+    }>;
+  };
   sequence?: Array<{
     stopId: string;
     orderId: string;
+    orderRef?: string | null;
     type: 'pickup' | 'dropoff';
     lat: number;
     lng: number;
