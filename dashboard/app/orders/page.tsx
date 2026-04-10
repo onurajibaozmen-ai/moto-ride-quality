@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
+import QuickAutoAssignButton from '@/components/orders/quick-auto-assign-button';
 
 type OrderStatus =
   | 'PENDING'
@@ -20,6 +21,17 @@ type OrderItem = {
   estimatedDeliveryTime?: string | null;
   actualPickupTime?: string | null;
   actualDeliveryTime?: string | null;
+
+  pickupLat: number;
+  pickupLng: number;
+  dropoffLat: number;
+  dropoffLng: number;
+
+  pickupAddress?: string | null;
+  dropoffAddress?: string | null;
+  pickupFormattedAddress?: string | null;
+  dropoffFormattedAddress?: string | null;
+
   courier?: {
     id: string;
     name: string;
@@ -102,6 +114,22 @@ function isValidStatus(value?: string): value is Exclude<OrderStatus, 'ALL'> {
     value === 'ASSIGNED' ||
     value === 'PICKED_UP' ||
     value === 'DELIVERED'
+  );
+}
+
+function getPickupLabel(order: OrderItem) {
+  return (
+    order.pickupFormattedAddress ||
+    order.pickupAddress ||
+    `${order.pickupLat}, ${order.pickupLng}`
+  );
+}
+
+function getDropoffLabel(order: OrderItem) {
+  return (
+    order.dropoffFormattedAddress ||
+    order.dropoffAddress ||
+    `${order.dropoffLat}, ${order.dropoffLng}`
   );
 }
 
@@ -235,7 +263,7 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
           <div>
             <h1 className="text-3xl font-bold text-slate-900">Orders</h1>
             <p className="mt-2 text-slate-600">
-              Sipariş operasyonları ve dispatch görünümü.
+              Sipariş operasyonları, adres bilgileri ve hızlı dispatch görünümü.
             </p>
           </div>
 
@@ -322,7 +350,11 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
               method="GET"
               className="grid w-full grid-cols-1 gap-3 md:grid-cols-4 lg:max-w-4xl"
             >
-              <input type="hidden" name="status" value={selectedStatus === 'ALL' ? '' : selectedStatus} />
+              <input
+                type="hidden"
+                name="status"
+                value={selectedStatus === 'ALL' ? '' : selectedStatus}
+              />
 
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-500">
@@ -375,7 +407,11 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
                 </button>
 
                 <Link
-                  href={selectedStatus === 'ALL' ? '/orders' : `/orders?status=${selectedStatus}`}
+                  href={
+                    selectedStatus === 'ALL'
+                      ? '/orders'
+                      : `/orders?status=${selectedStatus}`
+                  }
                   className="inline-flex w-full items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50"
                 >
                   Clear
@@ -403,12 +439,11 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
                 <tr>
                   <th className="px-4 py-3 text-left">Order</th>
                   <th className="px-4 py-3 text-left">Status</th>
+                  <th className="px-4 py-3 text-left">Pickup</th>
+                  <th className="px-4 py-3 text-left">Dropoff</th>
                   <th className="px-4 py-3 text-left">Courier</th>
-                  <th className="px-4 py-3 text-left">Ride</th>
                   <th className="px-4 py-3 text-left">Created</th>
-                  <th className="px-4 py-3 text-left">Est. Delivery</th>
-                  <th className="px-4 py-3 text-left">Actual Delivery</th>
-                  <th className="px-4 py-3 text-left">Dispatch UX</th>
+                  <th className="px-4 py-3 text-left">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -431,6 +466,14 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
                       </span>
                     </td>
 
+                    <td className="max-w-xs px-4 py-3 text-slate-700">
+                      <div className="line-clamp-2">{getPickupLabel(order)}</div>
+                    </td>
+
+                    <td className="max-w-xs px-4 py-3 text-slate-700">
+                      <div className="line-clamp-2">{getDropoffLabel(order)}</div>
+                    </td>
+
                     <td className="px-4 py-3 text-slate-700">
                       {order.courier ? (
                         <div>
@@ -441,21 +484,8 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
                             {order.courier.phone}
                           </div>
                         </div>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3 text-slate-700">
-                      {order.ride ? (
-                        <div>
-                          <div className="font-medium text-slate-900">
-                            {order.ride.id}
-                          </div>
-                          <div className="text-xs text-slate-500">
-                            {order.ride.status}
-                          </div>
-                        </div>
+                      ) : order.status === 'PENDING' ? (
+                        <QuickAutoAssignButton orderId={order.id} />
                       ) : (
                         '-'
                       )}
@@ -465,21 +495,21 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
                       {formatDate(order.createdAt)}
                     </td>
 
-                    <td className="px-4 py-3 text-slate-700">
-                      {formatDate(order.estimatedDeliveryTime)}
-                    </td>
-
-                    <td className="px-4 py-3 text-slate-700">
-                      {formatDate(order.actualDeliveryTime)}
-                    </td>
-
                     <td className="px-4 py-3">
-                      <Link
-                        href={`/orders/${order.id}`}
-                        className="font-medium text-blue-600 hover:underline"
-                      >
-                        Explain / Compare / Assign
-                      </Link>
+                      <div className="flex flex-col gap-2">
+                        <Link
+                          href={`/orders/${order.id}`}
+                          className="font-medium text-blue-600 hover:underline"
+                        >
+                          Explain / Compare / Assign
+                        </Link>
+
+                        {order.status === 'PENDING' && (
+                          <span className="text-xs text-slate-500">
+                            Hızlı atama courier sütununda.
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -487,7 +517,7 @@ export default async function OrdersPage({ searchParams }: OrdersPageProps) {
                 {filteredOrders.length === 0 && (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={7}
                       className="px-4 py-10 text-center text-slate-500"
                     >
                       Filtrelere uygun order bulunamadı.

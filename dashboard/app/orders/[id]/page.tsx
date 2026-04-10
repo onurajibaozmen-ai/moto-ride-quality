@@ -1,5 +1,5 @@
-import SimpleMap from '@/components/maps/simple-map';
 import Link from 'next/link';
+import SimpleMap from '@/components/maps/simple-map';
 import {
   apiFetch,
   approveAutoAssign,
@@ -7,17 +7,27 @@ import {
   manualAssignOrder,
   rejectRecommendation,
 } from '@/lib/api';
-
+import { getDirectionsPath } from '@/lib/maps/get-directions';
+import { decodePolyline } from '@/lib/maps/decode-polyline';
 
 type OrderDetailResponse = {
   id: string;
   externalRef?: string | null;
   status: string;
+
   pickupLat: number;
   pickupLng: number;
   dropoffLat: number;
   dropoffLng: number;
+
+  pickupAddress?: string | null;
+  dropoffAddress?: string | null;
+  pickupFormattedAddress?: string | null;
+  dropoffFormattedAddress?: string | null;
+
   notes?: string | null;
+  deliveryNote?: string | null;
+
   assignedAt?: string | null;
   pickedUpAt?: string | null;
   deliveredAt?: string | null;
@@ -25,6 +35,7 @@ type OrderDetailResponse = {
   estimatedDeliveryTime?: string | null;
   actualPickupTime?: string | null;
   actualDeliveryTime?: string | null;
+
   courier?: {
     id: string;
     name: string;
@@ -33,6 +44,7 @@ type OrderDetailResponse = {
     availabilityStatus?: string;
     availabilityUpdatedAt?: string | null;
   } | null;
+
   ride?: {
     id: string;
     status: string;
@@ -40,6 +52,7 @@ type OrderDetailResponse = {
     endedAt?: string | null;
     score?: number | null;
   } | null;
+
   dispatchPanel?: {
     order: {
       id: string;
@@ -77,6 +90,7 @@ type OrderDetailResponse = {
       suggestions: BatchSuggestion[];
     };
   };
+
   dispatchLogs?: DispatchLogItem[];
 };
 
@@ -192,6 +206,22 @@ function yesNo(value?: boolean) {
   return value ? 'Yes' : 'No';
 }
 
+function getPickupLabel(order: OrderDetailResponse) {
+  return (
+    order.pickupFormattedAddress ||
+    order.pickupAddress ||
+    `${order.pickupLat}, ${order.pickupLng}`
+  );
+}
+
+function getDropoffLabel(order: OrderDetailResponse) {
+  return (
+    order.dropoffFormattedAddress ||
+    order.dropoffAddress ||
+    `${order.dropoffLat}, ${order.dropoffLng}`
+  );
+}
+
 async function getOrderDetail(id: string): Promise<OrderDetailResponse | null> {
   try {
     return await apiFetch<OrderDetailResponse>(`/dashboard/orders/${id}`);
@@ -297,6 +327,25 @@ export default async function OrderDetailPage({
     },
   ];
 
+  let routePath = [
+    { lat: order.pickupLat, lng: order.pickupLng },
+    { lat: order.dropoffLat, lng: order.dropoffLng },
+  ];
+
+  try {
+    const encoded = await getDirectionsPath(
+      { lat: order.pickupLat, lng: order.pickupLng },
+      { lat: order.dropoffLat, lng: order.dropoffLng },
+    );
+
+    if (encoded) {
+      routePath = decodePolyline(encoded);
+    }
+  } catch (error) {
+    console.error('Directions fallback used', error);
+  }
+
+
   const recommendation = order.dispatchPanel?.recommendation;
   const recommendedCourier = recommendation?.recommendedCourier ?? null;
   const candidates = recommendation?.candidates ?? [];
@@ -342,6 +391,61 @@ export default async function OrderDetailPage({
             <div className="text-sm text-slate-500">Actual Delivery</div>
             <div className="mt-2 text-sm font-medium text-slate-900">
               {formatDate(order.actualDeliveryTime)}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-900">
+              Address Details
+            </h2>
+
+            <div className="mt-4 space-y-4 text-sm text-slate-700">
+              <div>
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Pickup Address
+                </div>
+                <div className="mt-1 text-slate-900">{getPickupLabel(order)}</div>
+              </div>
+
+              <div>
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Dropoff Address
+                </div>
+                <div className="mt-1 text-slate-900">{getDropoffLabel(order)}</div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                    Pickup Coordinates
+                  </div>
+                  <div className="mt-1 text-slate-900">
+                    {order.pickupLat}, {order.pickupLng}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                    Dropoff Coordinates
+                  </div>
+                  <div className="mt-1 text-slate-900">
+                    {order.dropoffLat}, {order.dropoffLng}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-900">Order Map</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Pickup ve dropoff noktaları.
+            </p>
+
+            <div className="mt-4">
+              <SimpleMap markers={orderMarkers} path={routePath} />
             </div>
           </div>
         </div>
@@ -438,7 +542,7 @@ export default async function OrderDetailPage({
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3 text-sm text-slate-700">
+                <div className="mt-4 grid grid-cols-1 gap-3 text-sm text-slate-700 md:grid-cols-3">
                   <div>
                     <span className="font-medium text-slate-900">Delivered Today:</span>{' '}
                     {recommendedCourier.dailyStats.deliveredCountToday}
@@ -454,7 +558,7 @@ export default async function OrderDetailPage({
                 </div>
 
                 <div className="mt-4 rounded-xl bg-white p-4 text-sm text-slate-700">
-                  <div className="font-medium text-slate-900 mb-3">
+                  <div className="mb-3 font-medium text-slate-900">
                     Why this courier was selected
                   </div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -494,7 +598,7 @@ export default async function OrderDetailPage({
                 </div>
 
                 <div className="mt-4 rounded-xl bg-white p-4 text-sm text-slate-700">
-                  <div className="font-medium text-slate-900 mb-3">
+                  <div className="mb-3 font-medium text-slate-900">
                     Score breakdown
                   </div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -617,23 +721,6 @@ export default async function OrderDetailPage({
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Order Map</h2>
-          <p className="mt-2 text-sm text-slate-600">
-            Pickup ve dropoff noktaları.
-          </p>
-
-          <div className="mt-4">
-            <SimpleMap
-              markers={orderMarkers}
-              path={[
-                { lat: order.pickupLat, lng: order.pickupLng },
-                { lat: order.dropoffLat, lng: order.dropoffLng },
-              ]}
-            />
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">
             Dispatch History
           </h2>
@@ -681,67 +768,93 @@ export default async function OrderDetailPage({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">
-            Batch Suggestions
-          </h2>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-900">
+              Notes
+            </h2>
 
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-600">
-                <tr>
-                  <th className="px-4 py-3 text-left">Order</th>
-                  <th className="px-4 py-3 text-left">Status</th>
-                  <th className="px-4 py-3 text-left">Pickup Distance</th>
-                  <th className="px-4 py-3 text-left">Dropoff Distance</th>
-                  <th className="px-4 py-3 text-left">Avg Distance</th>
-                  <th className="px-4 py-3 text-left">Batch Score</th>
-                </tr>
-              </thead>
-              <tbody>
-                {suggestions.map((suggestion) => (
-                  <tr
-                    key={suggestion.order.id}
-                    className="border-t border-slate-200"
-                  >
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900">
-                        {suggestion.order.externalRef ?? suggestion.order.id}
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        {suggestion.order.id}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">
-                      {suggestion.order.status}
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">
-                      {suggestion.metrics.pickupDistanceM}
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">
-                      {suggestion.metrics.dropoffDistanceM}
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">
-                      {suggestion.metrics.averageDistanceM}
-                    </td>
-                    <td className="px-4 py-3 font-medium text-slate-900">
-                      {suggestion.batchScore}
-                    </td>
-                  </tr>
-                ))}
+            <div className="mt-4 space-y-4 text-sm text-slate-700">
+              <div>
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Order Notes
+                </div>
+                <div className="mt-1 text-slate-900">{order.notes ?? '-'}</div>
+              </div>
 
-                {suggestions.length === 0 && (
+              <div>
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Delivery Note
+                </div>
+                <div className="mt-1 text-slate-900">
+                  {order.deliveryNote ?? '-'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-900">
+              Batch Suggestions
+            </h2>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-100 text-slate-600">
                   <tr>
-                    <td
-                      colSpan={6}
-                      className="px-4 py-8 text-center text-slate-500"
-                    >
-                      No batch suggestions found.
-                    </td>
+                    <th className="px-4 py-3 text-left">Order</th>
+                    <th className="px-4 py-3 text-left">Status</th>
+                    <th className="px-4 py-3 text-left">Pickup Distance</th>
+                    <th className="px-4 py-3 text-left">Dropoff Distance</th>
+                    <th className="px-4 py-3 text-left">Avg Distance</th>
+                    <th className="px-4 py-3 text-left">Batch Score</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {suggestions.map((suggestion) => (
+                    <tr
+                      key={suggestion.order.id}
+                      className="border-t border-slate-200"
+                    >
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-slate-900">
+                          {suggestion.order.externalRef ?? suggestion.order.id}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {suggestion.order.id}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {suggestion.order.status}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {suggestion.metrics.pickupDistanceM}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {suggestion.metrics.dropoffDistanceM}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {suggestion.metrics.averageDistanceM}
+                      </td>
+                      <td className="px-4 py-3 font-medium text-slate-900">
+                        {suggestion.batchScore}
+                      </td>
+                    </tr>
+                  ))}
+
+                  {suggestions.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="px-4 py-8 text-center text-slate-500"
+                      >
+                        No batch suggestions found.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
