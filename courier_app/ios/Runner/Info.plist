@@ -40,10 +40,14 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Aktif ride sırasında konum takibi için izin gerekiyor.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Kuryenin sürüş verisini toplamak için konum gerekiyor.</string>
+	<string>Kurye konumunu navigasyon ve teslimat akışı için kullanıyoruz.</string>
+
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Kurye konumunu teslimat takibi ve rota yönetimi için kullanıyoruz.</string>
+
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Kurye konumunu teslimat takibi için kullanıyoruz.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -18,10 +18,15 @@ export class OrdersController {
     @Body()
     body: {
       externalRef?: string;
-      pickupLat: number;
-      pickupLng: number;
-      dropoffLat: number;
-      dropoffLng: number;
+
+      pickupLat?: number;
+      pickupLng?: number;
+      dropoffLat?: number;
+      dropoffLng?: number;
+
+      pickupAddress?: string;
+      dropoffAddress?: string;
+
       estimatedPickupTime?: string;
       estimatedDeliveryTime?: string;
       notes?: string;

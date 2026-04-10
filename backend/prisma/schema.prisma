@@ -214,6 +214,13 @@ model Order {
   dispatchLogs DispatchDecisionLog[]
   deliveryNote String?
 
+  pickupAddress           String?
+  dropoffAddress          String?
+  pickupFormattedAddress  String?
+  dropoffFormattedAddress String?
+  pickupPlaceId           String?
+  dropoffPlaceId          String?
+
   assignedCourierId String?
   rideId            String?
 

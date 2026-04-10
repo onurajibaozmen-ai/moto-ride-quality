@@ -14,6 +14,7 @@ import {
 
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { GeocodingService } from '../geocoding/geocoding.service';
 
 type ListOrdersParams = {
   status?: string;
@@ -56,67 +57,122 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly geocodingService: GeocodingService,
   ) {}
 
-  async createOrder(data: {
+  async createOrder(payload: {
     externalRef?: string;
-    pickupLat: number;
-    pickupLng: number;
-    dropoffLat: number;
-    dropoffLng: number;
+
+    pickupLat?: number;
+    pickupLng?: number;
+    dropoffLat?: number;
+    dropoffLng?: number;
+
+    pickupAddress?: string;
+    dropoffAddress?: string;
+
     estimatedPickupTime?: string;
     estimatedDeliveryTime?: string;
     notes?: string;
   }) {
-    const created = await this.prisma.order.create({
-      data: {
-        externalRef: data.externalRef ?? null,
-        pickupLat: data.pickupLat,
-        pickupLng: data.pickupLng,
-        dropoffLat: data.dropoffLat,
-        dropoffLng: data.dropoffLng,
-        estimatedPickupTime: data.estimatedPickupTime
-          ? new Date(data.estimatedPickupTime)
-          : null,
-        estimatedDeliveryTime: data.estimatedDeliveryTime
-          ? new Date(data.estimatedDeliveryTime)
-          : null,
-        notes: data.notes ?? null,
-        status: OrderStatus.PENDING,
-      },
-      include: {
-        courier: true,
-        ride: true,
-      },
-    });
+    const hasPickupCoordinates =
+      typeof payload.pickupLat === 'number' &&
+      typeof payload.pickupLng === 'number';
 
-    const trigger = await this.getDispatchTriggerCheck();
+    const hasDropoffCoordinates =
+      typeof payload.dropoffLat === 'number' &&
+      typeof payload.dropoffLng === 'number';
 
-    let autoRecommendationPreview: Awaited<
-      ReturnType<OrdersService['recommendCourier']>
-    > | null = null;
+    const hasPickupAddress = !!payload.pickupAddress?.trim();
+    const hasDropoffAddress = !!payload.dropoffAddress?.trim();
 
-    if (trigger.triggerSatisfied) {
-      try {
-        autoRecommendationPreview = await this.recommendCourier(created.id);
-      } catch {
-        autoRecommendationPreview = null;
-      }
+    if ((!hasPickupCoordinates && !hasPickupAddress) ||
+        (!hasDropoffCoordinates && !hasDropoffAddress)) {
+      throw new BadRequestException(
+        'Either coordinates or addresses must be provided for pickup and dropoff',
+      );
     }
 
-    await this.createDispatchLog({
-      orderId: created.id,
-      recommendation: autoRecommendationPreview,
-      triggerSnapshot: trigger,
-      status: DispatchDecisionStatus.PENDING,
-      reason: autoRecommendationPreview
-        ? 'order_created_auto_recommendation_generated'
-        : 'order_created_no_recommendation',
+    let pickupLat = payload.pickupLat;
+    let pickupLng = payload.pickupLng;
+    let dropoffLat = payload.dropoffLat;
+    let dropoffLng = payload.dropoffLng;
+
+    let pickupFormattedAddress: string | null = null;
+    let dropoffFormattedAddress: string | null = null;
+    let pickupPlaceId: string | null = null;
+    let dropoffPlaceId: string | null = null;
+
+    if (!hasPickupCoordinates && hasPickupAddress) {
+      const pickupGeocode = await this.geocodingService.geocodeAddress(
+        payload.pickupAddress!.trim(),
+      );
+
+      pickupLat = pickupGeocode.lat;
+      pickupLng = pickupGeocode.lng;
+      pickupFormattedAddress = pickupGeocode.formattedAddress;
+      pickupPlaceId = pickupGeocode.placeId;
+    }
+
+    if (!hasDropoffCoordinates && hasDropoffAddress) {
+      const dropoffGeocode = await this.geocodingService.geocodeAddress(
+        payload.dropoffAddress!.trim(),
+      );
+
+      dropoffLat = dropoffGeocode.lat;
+      dropoffLng = dropoffGeocode.lng;
+      dropoffFormattedAddress = dropoffGeocode.formattedAddress;
+      dropoffPlaceId = dropoffGeocode.placeId;
+    }
+
+    if (
+      typeof pickupLat !== 'number' ||
+      typeof pickupLng !== 'number' ||
+      typeof dropoffLat !== 'number' ||
+      typeof dropoffLng !== 'number'
+    ) {
+      throw new BadRequestException(
+        'Valid pickup and dropoff coordinates could not be resolved',
+      );
+    }
+
+    const created = await this.prisma.order.create({
+      data: {
+        externalRef: payload.externalRef ?? null,
+
+        pickupLat,
+        pickupLng,
+        dropoffLat,
+        dropoffLng,
+
+        pickupAddress: payload.pickupAddress?.trim() ?? null,
+        dropoffAddress: payload.dropoffAddress?.trim() ?? null,
+        pickupFormattedAddress,
+        dropoffFormattedAddress,
+        pickupPlaceId,
+        dropoffPlaceId,
+
+        status: OrderStatus.PENDING,
+        notes: payload.notes ?? null,
+        estimatedPickupTime: payload.estimatedPickupTime
+          ? new Date(payload.estimatedPickupTime)
+          : null,
+        estimatedDeliveryTime: payload.estimatedDeliveryTime
+          ? new Date(payload.estimatedDeliveryTime)
+          : null,
+      },
     });
+
+    let autoRecommendationPreview: any = null;
+
+    try {
+      autoRecommendationPreview = await this.recommendCourier(created.id);
+    } catch (error) {
+      autoRecommendationPreview = null;
+    }
 
     return {
       ...created,
-      dispatchTrigger: trigger,
       autoRecommendationPreview,
     };
   }

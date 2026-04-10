@@ -1,12 +1,11 @@
 import { Module } from '@nestjs/common';
-
-import { PrismaModule } from '../prisma/prisma.module';
-import { UsersModule } from '../users/users.module';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import { UsersModule } from '../users/users.module';
+import { GeocodingModule } from '../geocoding/geocoding.module';
 
 @Module({
-  imports: [PrismaModule, UsersModule],
+  imports: [UsersModule, GeocodingModule],
   controllers: [OrdersController],
   providers: [OrdersService],
   exports: [OrdersService],

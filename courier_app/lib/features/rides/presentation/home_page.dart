@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:geolocator/geolocator.dart';
 
-import '../../../core/network/api_client.dart';
 import '../data/orders_api.dart';
 import '../data/telemetry_api.dart';
 import '../data/telemetry_queue.dart';
@@ -30,8 +30,11 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _deliveryNoteController = TextEditingController();
 
   Map<String, dynamic>? _nextStop;
+  List<Map<String, dynamic>> _assignedOrders = [];
   bool _loadingNextStop = false;
+  bool _loadingOrders = false;
   bool _delivering = false;
+  bool _pickingUp = false;
   Timer? _flushTimer;
 
   @override
@@ -41,8 +44,9 @@ class _HomePageState extends State<HomePage> {
     _ordersApi = OrdersApi();
     _telemetryApi = TelemetryApi();
     _telemetryQueue = TelemetryQueue(_telemetryApi);
+    _ensureLocationPermission();
 
-    _loadNextStop();
+    _bootstrap();
 
     _flushTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       await _telemetryQueue.flush(
@@ -52,11 +56,79 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  Future<void> _ensureLocationPermission() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      _showMessage('Konum servisleri kapalı.');
+      return;
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.denied) {
+      _showMessage('Konum izni reddedildi.');
+      return;
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      _showMessage('Konum izni kalıcı reddedildi. Ayarlardan açmalısın.');
+      return;
+    }
+
+    _showMessage('Konum izni hazır.');
+  }
+
+  Future<void> _bootstrap() async {
+    await _loadAssignedOrders();
+    await _loadNextStop();
+  }
+
+  Future<void> _debugCurrentLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition();
+      debugPrint('CURRENT LOCATION => ${position.latitude}, ${position.longitude}');
+    } catch (e) {
+      debugPrint('Location read failed: $e');
+    }
+  }
+
   @override
   void dispose() {
     _flushTimer?.cancel();
     _deliveryNoteController.dispose();
     super.dispose();
+  }
+
+
+  Future<void> _loadAssignedOrders() async {
+    setState(() => _loadingOrders = true);
+
+    try {
+      final result = await _ordersApi.getAssignedOrders(widget.courierId);
+      final items = result['items'];
+
+      setState(() {
+        _assignedOrders = items is List
+            ? items
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList()
+            : [];
+      });
+    } catch (e) {
+      debugPrint('Failed to load assigned orders: $e');
+      setState(() {
+        _assignedOrders = [];
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _loadingOrders = false);
+      }
+    }
   }
 
   Future<void> _loadNextStop() async {
@@ -69,9 +141,41 @@ class _HomePageState extends State<HomePage> {
       });
     } catch (e) {
       debugPrint('Failed to load next stop: $e');
+      setState(() {
+        _nextStop = null;
+      });
     } finally {
       if (mounted) {
         setState(() => _loadingNextStop = false);
+      }
+    }
+  }
+
+  Future<void> _pickupOrder() async {
+    final orderId = _nextStop?['orderId']?.toString();
+
+    if (orderId == null || orderId.isEmpty) {
+      _showMessage('Pickup yapılacak sipariş bulunamadı.');
+      return;
+    }
+
+    if ((_nextStop?['type']?.toString() ?? '') != 'pickup') {
+      _showMessage('Şu an pickup aşamasında bir stop yok.');
+      return;
+    }
+
+    setState(() => _pickingUp = true);
+
+    try {
+      await _ordersApi.pickupOrder(orderId);
+      _showMessage('Pickup başarılı.');
+      await _bootstrap();
+    } catch (e) {
+      debugPrint('Pickup failed: $e');
+      _showMessage('Pickup işlemi başarısız oldu.');
+    } finally {
+      if (mounted) {
+        setState(() => _pickingUp = false);
       }
     }
   }
@@ -81,6 +185,11 @@ class _HomePageState extends State<HomePage> {
 
     if (orderId == null || orderId.isEmpty) {
       _showMessage('Teslim edilecek sipariş bulunamadı.');
+      return;
+    }
+
+    if ((_nextStop?['type']?.toString() ?? '') != 'dropoff') {
+      _showMessage('Önce pickup yapılmalı.');
       return;
     }
 
@@ -94,7 +203,8 @@ class _HomePageState extends State<HomePage> {
 
       _deliveryNoteController.clear();
       _showMessage('Teslimat kaydedildi.');
-      await _loadNextStop();
+
+      await _bootstrap();
     } catch (e) {
       debugPrint('Delivery failed: $e');
       _showMessage('Teslimat kaydedilemedi.');
@@ -110,7 +220,7 @@ class _HomePageState extends State<HomePage> {
     final lng = _nextStop?['lng'];
 
     if (lat == null || lng == null) {
-      _showMessage('Yönlendirme için next stop bulunamadı.');
+      _showMessage('Yönlendirme için stop bulunamadı.');
       return;
     }
 
@@ -154,16 +264,52 @@ class _HomePageState extends State<HomePage> {
         '-';
     final nextStopLat = _nextStop?['lat']?.toString() ?? '-';
     final nextStopLng = _nextStop?['lng']?.toString() ?? '-';
+    final nextStopSource = _nextStop?['source']?.toString() ?? '-';
+
+    final isPickup = nextStopType == 'pickup';
+    final isDropoff = nextStopType == 'dropoff';
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Courier App'),
       ),
       body: RefreshIndicator(
-        onRefresh: _loadNextStop,
+        onRefresh: _bootstrap,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: _loadingOrders
+                    ? const Center(child: CircularProgressIndicator())
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Assigned Orders',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          if (_assignedOrders.isEmpty)
+                            const Text('Assigned order bulunamadı.')
+                          else
+                            ..._assignedOrders.map(
+                              (order) => Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Text(
+                                  '${order['externalRef'] ?? order['id']} · ${order['status']}',
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+              ),
+            ),
+            const SizedBox(height: 16),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -184,12 +330,25 @@ class _HomePageState extends State<HomePage> {
                           Text('Type: $nextStopType'),
                           Text('Lat: $nextStopLat'),
                           Text('Lng: $nextStopLng'),
+                          Text('Source: $nextStopSource'),
                           const SizedBox(height: 12),
                           SizedBox(
                             width: double.infinity,
                             child: ElevatedButton(
                               onPressed: _openNavigation,
                               child: const Text('Open Navigation'),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              onPressed: isPickup && !_pickingUp
+                                  ? _pickupOrder
+                                  : null,
+                              child: Text(
+                                _pickingUp ? 'Picking up...' : 'Pickup Order',
+                              ),
                             ),
                           ),
                         ],
@@ -223,7 +382,9 @@ class _HomePageState extends State<HomePage> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: _delivering ? null : _completeDelivery,
+                        onPressed: isDropoff && !_delivering
+                            ? _completeDelivery
+                            : null,
                         child: Text(
                           _delivering ? 'Saving...' : 'Complete Delivery',
                         ),

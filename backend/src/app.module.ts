@@ -6,6 +6,7 @@ import { RidesModule } from './rides/rides.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
 import { OrdersModule } from './orders/orders.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { GeocodingModule } from './geocoding/geocoding.module';
 
 @Module({
   imports: [

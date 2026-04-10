@@ -3,8 +3,10 @@ import 'dart:convert';
 import '../../../core/network/api_client.dart';
 
 class OrdersApi {
-  Future<Map<String, dynamic>> getAssignedOrders() async {
-    final response = await ApiClient.dio.get('/orders');
+  Future<Map<String, dynamic>> getAssignedOrders(String courierId) async {
+    final response = await ApiClient.dio.get(
+      '/orders?courierId=$courierId',
+    );
     return _decode(response.data);
   }
 
