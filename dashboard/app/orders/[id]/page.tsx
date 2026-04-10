@@ -681,9 +681,15 @@ export default async function OrderDetailPage({
           </div>
 
           <div className="mt-4 space-y-4">
-            {batchSuggestions.map((suggestion) => (
-              <div
-                key={suggestion.orderId}
+            {batchSuggestions.map((suggestion, index) => {
+              const suggestionKey =
+                suggestion.orderId ||
+                suggestion.order?.id ||
+                `batch-suggestion-${index}`;
+
+              return (
+                <div
+                  key={suggestionKey}
                 className={`rounded-2xl border p-5 ${
                   suggestion.valid
                     ? 'border-emerald-200 bg-emerald-50'
@@ -736,9 +742,12 @@ export default async function OrderDetailPage({
                       </tr>
                     </thead>
                     <tbody>
-                      {(suggestion.sequence ?? []).map((stop) => (
+                      {(suggestion.sequence ?? []).map((stop, stopIndex) => (
                         <tr
-                          key={stop.stopId}
+                          key={
+                            stop.stopId ||
+                            `${suggestionKey}-${stop.orderId}-${stop.type}-${stopIndex}`
+                          }
                           className="border-t border-slate-200/70"
                         >
                           <td className="px-4 py-3 font-medium text-slate-900">
@@ -778,7 +787,8 @@ export default async function OrderDetailPage({
                   </table>
                 </div>
               </div>
-            ))}
+              );
+            })}
 
             {batchSuggestions.length === 0 && (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">

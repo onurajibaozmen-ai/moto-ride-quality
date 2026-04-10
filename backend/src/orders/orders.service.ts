@@ -222,19 +222,96 @@ export class OrdersService {
 
   async getOrderById(id: string) {
     const order = await this.prisma.order.findUnique({
-      where: { id },
-      include: {
+        where: { id },
+        include: {
         courier: true,
         ride: true,
-      },
+        },
     });
 
     if (!order) {
-      throw new NotFoundException('Order not found');
+        throw new NotFoundException('Order not found');
     }
 
-    return order;
-  }
+    const dispatchLogs = await this.prisma.dispatchDecisionLog.findMany({
+        where: { orderId: id },
+        orderBy: { createdAt: 'desc' },
+        include: {
+        recommendedCourier: {
+            select: {
+            id: true,
+            name: true,
+            phone: true,
+            availabilityStatus: true,
+            },
+        },
+        },
+    });
+
+    let recommendation: any = {
+        recommendedCourier: null,
+        candidates: [],
+    };
+
+    try {
+        recommendation = await this.recommendCourier(id);
+    } catch (error) {
+        recommendation = {
+        recommendedCourier: null,
+        candidates: [],
+        };
+    }
+
+    const pendingOrders = await this.prisma.order.findMany({
+        where: {
+        id: { not: id },
+        status: 'PENDING',
+        },
+        take: 20,
+        orderBy: { createdAt: 'asc' },
+    });
+
+    const batchSuggestions = this.buildBatchSuggestions(order, pendingOrders);
+
+    return {
+        ...order,
+        dispatchPanel: {
+        order: {
+            id: order.id,
+            externalRef: order.externalRef,
+            status: order.status,
+            assignedCourierId: order.assignedCourierId,
+            rideId: order.rideId,
+            pickupLat: order.pickupLat,
+            pickupLng: order.pickupLng,
+            dropoffLat: order.dropoffLat,
+            dropoffLng: order.dropoffLng,
+        },
+        currentAssignment: order.courier
+            ? {
+                courier: {
+                id: order.courier.id,
+                name: order.courier.name,
+                phone: order.courier.phone,
+                availabilityStatus: order.courier.availabilityStatus,
+                },
+                ride: order.ride
+                ? {
+                    id: order.ride.id,
+                    status: order.ride.status,
+                    startedAt: order.ride.startedAt,
+                    }
+                : null,
+            }
+            : null,
+        recommendation,
+        batchSuggestions: {
+            suggestions: batchSuggestions,
+        },
+        },
+        dispatchLogs,
+    };
+    }
 
   async getOrderDispatchLogs(orderId: string) {
     const order = await this.prisma.order.findUnique({
@@ -1547,30 +1624,6 @@ export class OrdersService {
     return Math.max(1, Math.round(minutes));
   }
 
-  private calculateDistanceMeters(
-    lat1: number,
-    lng1: number,
-    lat2: number,
-    lng2: number,
-  ) {
-    const toRad = (value: number) => (value * Math.PI) / 180;
-    const earthRadiusM = 6371000;
-
-    const dLat = toRad(lat2 - lat1);
-    const dLng = toRad(lng2 - lng1);
-
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(toRad(lat1)) *
-        Math.cos(toRad(lat2)) *
-        Math.sin(dLng / 2) *
-        Math.sin(dLng / 2);
-
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return earthRadiusM * c;
-  }
-
   private getDelaySeconds(
     estimated: Date | null,
     actual: Date | null,
@@ -1595,4 +1648,162 @@ export class OrdersService {
     if (diffSeconds < 0) return 'early';
     return 'on_time';
   }
+
+  // =========================
+    // BATCH ROUTING (SAFE ADD)
+    // =========================
+
+    private calculateDistanceMeters(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+    ) {
+    const toRad = (value: number) => (value * Math.PI) / 180;
+    const R = 6371000;
+
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLng / 2) ** 2;
+
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    private buildStops(order: any) {
+    const stops: any[] = [];
+
+    if (order.status === 'ASSIGNED') {
+        stops.push({
+        stopId: `${order.id}_pickup`,
+        orderId: order.id,
+        type: 'pickup',
+        lat: order.pickupLat,
+        lng: order.pickupLng,
+        });
+
+        stops.push({
+        stopId: `${order.id}_dropoff`,
+        orderId: order.id,
+        type: 'dropoff',
+        lat: order.dropoffLat,
+        lng: order.dropoffLng,
+        });
+    }
+
+    if (order.status === 'PICKED_UP') {
+        stops.push({
+        stopId: `${order.id}_dropoff`,
+        orderId: order.id,
+        type: 'dropoff',
+        lat: order.dropoffLat,
+        lng: order.dropoffLng,
+        });
+    }
+
+    return stops;
+    }
+
+    private buildSequence(orders: any[]) {
+    const stops = orders.flatMap((o) => this.buildStops(o));
+
+    if (!stops.length) return [];
+
+    const result: any[] = [];
+    const pending = [...stops];
+
+    let current = pending.shift();
+    result.push(current);
+
+    while (pending.length) {
+        let bestIndex = 0;
+        let bestDist = Infinity;
+
+        for (let i = 0; i < pending.length; i++) {
+        const s = pending[i];
+
+        if (
+            s.type === 'dropoff' &&
+            !result.some(
+            (r) => r.orderId === s.orderId && r.type === 'pickup',
+            )
+        ) {
+            continue;
+        }
+
+        const d = this.calculateDistanceMeters(
+            current.lat,
+            current.lng,
+            s.lat,
+            s.lng,
+        );
+
+        if (d < bestDist) {
+            bestDist = d;
+            bestIndex = i;
+        }
+        }
+
+        current = pending.splice(bestIndex, 1)[0];
+        result.push(current);
+    }
+
+    return result.map((s, i) => ({
+        ...s,
+        sequence: i + 1,
+    }));
+    }
+
+    private totalDistance(stops: any[]) {
+    let total = 0;
+
+    for (let i = 0; i < stops.length - 1; i++) {
+        total += this.calculateDistanceMeters(
+        stops[i].lat,
+        stops[i].lng,
+        stops[i + 1].lat,
+        stops[i + 1].lng,
+        );
+    }
+
+    return Math.round(total);
+    }
+
+    private buildBatchSuggestions(targetOrder: any, candidates: any[]) {
+    return candidates.map((candidate) => {
+        const projectedSequence = this.buildSequence([
+        targetOrder,
+        candidate,
+        ]);
+
+        const detour = this.totalDistance(projectedSequence);
+
+        const stopCount = projectedSequence.length;
+
+        const valid = stopCount <= 6 && detour <= 5000;
+
+        return {
+        order: {
+            id: candidate.id,
+            externalRef: candidate.externalRef,
+            pickupAddress:
+            candidate.pickupFormattedAddress ?? candidate.pickupAddress,
+            dropoffAddress:
+            candidate.dropoffFormattedAddress ?? candidate.dropoffAddress,
+        },
+        batchScore: Math.max(0, 100 - Math.round(detour / 100)),
+        insertionPreview: {
+            valid,
+            projectedStopCount: stopCount,
+            projectedDetourMeters: detour,
+            reasons: valid ? [] : ['rule_violation'],
+            projectedSequence,
+        },
+        };
+    });
+    }
 }
