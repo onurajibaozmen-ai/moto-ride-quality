@@ -3,24 +3,29 @@ import { apiFetch } from '@/lib/api';
 import SimpleMap from '@/components/maps/simple-map';
 
 type RidePlanResponse = {
-  ride: {
+  rideId?: string;
+  ride?: {
     id: string;
-    status: string;
-    startedAt: string | null;
-    endedAt: string | null;
-    score: number | null;
+    status?: string;
+    startedAt?: string | null;
+    endedAt?: string | null;
+    score?: number | null;
   };
-  courier: {
+  courier?: {
     id: string;
     name: string;
     phone: string;
     availabilityStatus?: string;
   } | null;
-  totalOrders: number;
-  orders: Array<{
+  totalOrders?: number;
+  totalRouteDistance?: number;
+  totalRouteDistanceMeters?: number;
+  orders?: Array<{
     id: string;
     externalRef?: string | null;
     status: string;
+    pickupAddress?: string | null;
+    dropoffAddress?: string | null;
     actualPickupTime?: string | null;
     actualDeliveryTime?: string | null;
     estimatedPickupTime?: string | null;
@@ -32,7 +37,7 @@ type RidePlanResponse = {
       deliveryEtaStatus?: string;
     };
   }>;
-  stops: Array<{
+  stops?: Array<{
     stopId: string;
     orderId: string;
     orderRef?: string | null;
@@ -41,8 +46,9 @@ type RidePlanResponse = {
     lng: number;
     status: string;
     sequence: number;
+    actualTs?: string | null;
   }>;
-  recommendedSequence: Array<{
+  recommendedSequence?: Array<{
     stopId: string;
     orderId: string;
     orderRef?: string | null;
@@ -51,8 +57,9 @@ type RidePlanResponse = {
     lng: number;
     status: string;
     sequence: number;
+    actualTs?: string | null;
   }>;
-  actualSequence: Array<{
+  actualSequence?: Array<{
     stopId: string;
     orderId: string;
     orderRef?: string | null;
@@ -70,9 +77,19 @@ function formatDate(value?: string | null) {
   return new Date(value).toLocaleString();
 }
 
+function formatMeters(value?: number | null) {
+  if (value === null || value === undefined) return '-';
+  return `${value.toLocaleString()} m`;
+}
+
+function formatSeconds(value?: number | null) {
+  if (value === null || value === undefined) return '-';
+  return `${value}s`;
+}
+
 async function getRidePlan(id: string): Promise<RidePlanResponse | null> {
   try {
-    return await apiFetch<RidePlanResponse>(`/dashboard/rides/${id}/plan`);
+    return await apiFetch<RidePlanResponse>(`/orders/rides/${id}/plan`);
   } catch (error) {
     console.error('Failed to fetch ride plan', error);
     return null;
@@ -108,7 +125,11 @@ export default async function RidePlanPage({
     );
   }
 
-  const stopMarkers = plan.recommendedSequence.map((stop) => ({
+  const recommendedSequence = plan.recommendedSequence ?? plan.stops ?? [];
+  const actualSequence = plan.actualSequence ?? [];
+  const orders = plan.orders ?? [];
+
+  const stopMarkers = recommendedSequence.map((stop) => ({
     id: stop.stopId,
     lat: stop.lat,
     lng: stop.lng,
@@ -116,7 +137,7 @@ export default async function RidePlanPage({
     title: `${stop.type.toUpperCase()} - ${stop.orderRef ?? stop.orderId}`,
   }));
 
-  const stopPath = plan.recommendedSequence.map((stop) => ({
+  const stopPath = recommendedSequence.map((stop) => ({
     lat: stop.lat,
     lng: stop.lng,
   }));
@@ -127,21 +148,29 @@ export default async function RidePlanPage({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">Ride Plan</h1>
-            <p className="mt-2 text-slate-600">{plan.ride.id}</p>
+            <p className="mt-2 text-slate-600">
+              {plan.ride?.id ?? plan.rideId ?? id}
+            </p>
           </div>
-          <Link
-            href={`/rides/${plan.ride.id}`}
-            className="text-blue-600 hover:underline"
-          >
-            Back to ride detail
-          </Link>
+
+          <div className="flex gap-3">
+            <Link href="/rides" className="text-blue-600 hover:underline">
+              Back to rides
+            </Link>
+            <Link
+              href={`/rides/${plan.ride?.id ?? plan.rideId ?? id}`}
+              className="text-blue-600 hover:underline"
+            >
+              Ride detail
+            </Link>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="text-sm text-slate-500">Ride Status</div>
             <div className="mt-2 text-xl font-semibold text-slate-900">
-              {plan.ride.status}
+              {plan.ride?.status ?? '-'}
             </div>
           </div>
 
@@ -150,58 +179,115 @@ export default async function RidePlanPage({
             <div className="mt-2 text-sm font-medium text-slate-900">
               {plan.courier?.name ?? '-'}
             </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {plan.courier?.phone ?? '-'}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm text-slate-500">Availability</div>
+            <div className="mt-2 text-xl font-semibold text-slate-900">
+              {plan.courier?.availabilityStatus ?? '-'}
+            </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="text-sm text-slate-500">Total Orders</div>
             <div className="mt-2 text-xl font-semibold text-slate-900">
-              {plan.totalOrders}
+              {plan.totalOrders ?? orders.length}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm text-slate-500">Route Distance</div>
+            <div className="mt-2 text-xl font-semibold text-slate-900">
+              {formatMeters(
+                plan.totalRouteDistanceMeters ?? plan.totalRouteDistance ?? null,
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm text-slate-500">Started At</div>
+            <div className="mt-2 text-sm font-medium text-slate-900">
+              {formatDate(plan.ride?.startedAt)}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm text-slate-500">Ended At</div>
+            <div className="mt-2 text-sm font-medium text-slate-900">
+              {formatDate(plan.ride?.endedAt)}
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="text-sm text-slate-500">Ride Score</div>
             <div className="mt-2 text-xl font-semibold text-slate-900">
-              {plan.ride.score ?? '-'}
+              {plan.ride?.score ?? '-'}
             </div>
           </div>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">
-            Ride Plan Map
+            Route Map
           </h2>
           <p className="mt-2 text-sm text-slate-600">
-            Stop sequence harita görünümü.
+            Recommended stop sequence ve rota görünümü.
           </p>
 
           <div className="mt-4">
-            <SimpleMap markers={stopMarkers} path={stopPath} />
+            {stopMarkers.length > 0 ? (
+              <SimpleMap markers={stopMarkers} path={stopPath} />
+            ) : (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+                Haritada gösterilecek stop bulunamadı.
+              </div>
+            )}
           </div>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">
-            Recommended Sequence
-          </h2>
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-lg font-semibold text-slate-900">
+              Recommended Sequence
+            </h2>
+            <div className="text-sm text-slate-500">
+              {recommendedSequence.length} stop
+            </div>
+          </div>
 
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-100 text-slate-600">
                 <tr>
-                  <th className="px-4 py-3 text-left">Sequence</th>
+                  <th className="px-4 py-3 text-left">Seq</th>
                   <th className="px-4 py-3 text-left">Type</th>
                   <th className="px-4 py-3 text-left">Order</th>
                   <th className="px-4 py-3 text-left">Status</th>
-                  <th className="px-4 py-3 text-left">Lat</th>
-                  <th className="px-4 py-3 text-left">Lng</th>
+                  <th className="px-4 py-3 text-left">Coordinates</th>
                 </tr>
               </thead>
               <tbody>
-                {plan.recommendedSequence.map((stop) => (
+                {recommendedSequence.map((stop) => (
                   <tr key={stop.stopId} className="border-t border-slate-200">
-                    <td className="px-4 py-3 text-slate-700">{stop.sequence}</td>
-                    <td className="px-4 py-3 text-slate-700">{stop.type}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      {stop.sequence}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs font-medium ${
+                          stop.type === 'pickup'
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-emerald-100 text-emerald-700'
+                        }`}
+                      >
+                        {stop.type}
+                      </span>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900">
                         {stop.orderRef ?? stop.orderId}
@@ -209,18 +295,19 @@ export default async function RidePlanPage({
                       <div className="text-xs text-slate-500">{stop.orderId}</div>
                     </td>
                     <td className="px-4 py-3 text-slate-700">{stop.status}</td>
-                    <td className="px-4 py-3 text-slate-700">{stop.lat}</td>
-                    <td className="px-4 py-3 text-slate-700">{stop.lng}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {stop.lat}, {stop.lng}
+                    </td>
                   </tr>
                 ))}
 
-                {plan.recommendedSequence.length === 0 && (
+                {recommendedSequence.length === 0 && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={5}
                       className="px-4 py-8 text-center text-slate-500"
                     >
-                      No recommended stops found.
+                      No recommended sequence found.
                     </td>
                   </tr>
                 )}
@@ -230,13 +317,20 @@ export default async function RidePlanPage({
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Actual Sequence</h2>
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-lg font-semibold text-slate-900">
+              Actual Sequence
+            </h2>
+            <div className="text-sm text-slate-500">
+              {actualSequence.length} completed stop
+            </div>
+          </div>
 
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-100 text-slate-600">
                 <tr>
-                  <th className="px-4 py-3 text-left">Sequence</th>
+                  <th className="px-4 py-3 text-left">Seq</th>
                   <th className="px-4 py-3 text-left">Type</th>
                   <th className="px-4 py-3 text-left">Order</th>
                   <th className="px-4 py-3 text-left">Status</th>
@@ -244,10 +338,22 @@ export default async function RidePlanPage({
                 </tr>
               </thead>
               <tbody>
-                {plan.actualSequence.map((stop) => (
+                {actualSequence.map((stop) => (
                   <tr key={stop.stopId} className="border-t border-slate-200">
-                    <td className="px-4 py-3 text-slate-700">{stop.sequence}</td>
-                    <td className="px-4 py-3 text-slate-700">{stop.type}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      {stop.sequence}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs font-medium ${
+                          stop.type === 'pickup'
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-emerald-100 text-emerald-700'
+                        }`}
+                      >
+                        {stop.type}
+                      </span>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900">
                         {stop.orderRef ?? stop.orderId}
@@ -261,13 +367,13 @@ export default async function RidePlanPage({
                   </tr>
                 ))}
 
-                {plan.actualSequence.length === 0 && (
+                {actualSequence.length === 0 && (
                   <tr>
                     <td
                       colSpan={5}
                       className="px-4 py-8 text-center text-slate-500"
                     >
-                      No actual stops found yet.
+                      Henüz tamamlanmış actual stop yok.
                     </td>
                   </tr>
                 )}
@@ -278,7 +384,7 @@ export default async function RidePlanPage({
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">
-            Ride Orders & ETA Metrics
+            Orders in Ride
           </h2>
 
           <div className="mt-4 overflow-x-auto">
@@ -287,14 +393,16 @@ export default async function RidePlanPage({
                 <tr>
                   <th className="px-4 py-3 text-left">Order</th>
                   <th className="px-4 py-3 text-left">Status</th>
+                  <th className="px-4 py-3 text-left">Pickup Address</th>
+                  <th className="px-4 py-3 text-left">Dropoff Address</th>
                   <th className="px-4 py-3 text-left">Pickup ETA</th>
                   <th className="px-4 py-3 text-left">Delivery ETA</th>
-                  <th className="px-4 py-3 text-left">Pickup Delay (s)</th>
-                  <th className="px-4 py-3 text-left">Delivery Delay (s)</th>
+                  <th className="px-4 py-3 text-left">Pickup Delay</th>
+                  <th className="px-4 py-3 text-left">Delivery Delay</th>
                 </tr>
               </thead>
               <tbody>
-                {plan.orders.map((order) => (
+                {orders.map((order) => (
                   <tr key={order.id} className="border-t border-slate-200">
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900">
@@ -303,6 +411,16 @@ export default async function RidePlanPage({
                       <div className="text-xs text-slate-500">{order.id}</div>
                     </td>
                     <td className="px-4 py-3 text-slate-700">{order.status}</td>
+                    <td className="max-w-xs px-4 py-3 text-slate-700">
+                      <div className="line-clamp-2">
+                        {order.pickupAddress ?? '-'}
+                      </div>
+                    </td>
+                    <td className="max-w-xs px-4 py-3 text-slate-700">
+                      <div className="line-clamp-2">
+                        {order.dropoffAddress ?? '-'}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-slate-700">
                       {order.metrics?.pickupEtaStatus ?? '-'}
                     </td>
@@ -310,21 +428,21 @@ export default async function RidePlanPage({
                       {order.metrics?.deliveryEtaStatus ?? '-'}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {order.metrics?.pickupDelaySeconds ?? '-'}
+                      {formatSeconds(order.metrics?.pickupDelaySeconds)}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {order.metrics?.deliveryDelaySeconds ?? '-'}
+                      {formatSeconds(order.metrics?.deliveryDelaySeconds)}
                     </td>
                   </tr>
                 ))}
 
-                {plan.orders.length === 0 && (
+                {orders.length === 0 && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={8}
                       className="px-4 py-8 text-center text-slate-500"
                     >
-                      No orders in this ride.
+                      Ride içinde order bulunamadı.
                     </td>
                   </tr>
                 )}

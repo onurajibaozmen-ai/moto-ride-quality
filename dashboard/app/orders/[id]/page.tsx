@@ -10,6 +10,88 @@ import {
 import { getDirectionsPath } from '@/lib/maps/get-directions';
 import { decodePolyline } from '@/lib/maps/decode-polyline';
 
+type CandidateCourier = {
+  courier: {
+    id: string;
+    name: string;
+    phone: string;
+    availabilityStatus?: string;
+  };
+  online?: boolean;
+  recommendationScore: number;
+  metrics?: {
+    pickupDistanceM?: number | null;
+    estimatedPickupEtaMinutes?: number | null;
+    deliveredCountPriorityScore?: number;
+    routeDistancePriorityScore?: number;
+    distanceScore?: number;
+    onlineScore?: number;
+    freshnessScore?: number;
+    activeRidePenalty?: number;
+    activeRideOrderPenalty?: number;
+    staleLocationPenalty?: number;
+    missingLocationPenalty?: number;
+  };
+  dailyStats?: {
+    deliveredCountToday?: number;
+    totalRouteDistanceMetersToday?: number;
+  };
+  constraints?: {
+    activeOrderCount?: number;
+    activeStopCount?: number;
+    detourMeters?: number;
+    valid?: boolean;
+    reasons?: string[];
+  };
+  activeRide?: {
+    id: string;
+    status: string;
+    orderCount?: number;
+  } | null;
+  location?: {
+    lat?: number | null;
+    lng?: number | null;
+    ts?: string | null;
+    rideId?: string | null;
+    ageSeconds?: number | null;
+    source?: string;
+    fresh?: boolean;
+  };
+};
+
+type DispatchLogItem = {
+  id: string;
+  orderId: string;
+  recommendedCourierId: string | null;
+  status: string;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  recommendedCourier: {
+    id: string;
+    name: string;
+    phone: string;
+    availabilityStatus: string;
+  } | null;
+};
+
+type BatchSuggestion = {
+  orderId?: string;
+  valid?: boolean;
+  detour?: number;
+  stopCount?: number;
+  reasons?: string[];
+  score?: number;
+  sequence?: Array<{
+    stopId: string;
+    orderId: string;
+    type: 'pickup' | 'dropoff';
+    lat: number;
+    lng: number;
+    sequence: number;
+  }>;
+};
+
 type OrderDetailResponse = {
   id: string;
   externalRef?: string | null;
@@ -79,112 +161,20 @@ type OrderDetailResponse = {
       } | null;
     } | null;
     recommendation: {
-      ruleEngine?: {
-        name: string;
-        priorityOrder: string[];
-      };
       recommendedCourier: CandidateCourier | null;
       candidates: CandidateCourier[];
     };
-    batchSuggestions: {
-      suggestions: BatchSuggestion[];
+    batchSuggestions?: {
+      targetOrderId?: string;
+      rules?: {
+        maxStop?: number;
+        maxDetour?: number;
+      };
+      suggestions?: BatchSuggestion[];
     };
   };
 
   dispatchLogs?: DispatchLogItem[];
-};
-
-type CandidateCourier = {
-  courier: {
-    id: string;
-    name: string;
-    phone: string;
-    lastSeenAt?: string | null;
-    availabilityStatus?: string;
-  };
-  online: boolean;
-  activeRide: {
-    id: string;
-    status: string;
-    orderCount: number;
-  } | null;
-  location: {
-    lat: number | null;
-    lng: number | null;
-    ts: string | null;
-    rideId: string | null;
-    ageSeconds: number | null;
-    source: string;
-    fresh: boolean;
-  };
-  dailyStats: {
-    deliveredCountToday: number;
-    totalRouteDistanceMetersToday: number;
-  };
-  constraints: {
-    activeOrderCount: number;
-    activeStopCount: number;
-    detourMeters: number;
-    valid: boolean;
-    reasons: string[];
-  };
-  metrics: {
-    pickupDistanceM: number | null;
-    estimatedPickupEtaMinutes: number | null;
-    deliveredCountPriorityScore: number;
-    routeDistancePriorityScore: number;
-    distanceScore: number;
-    onlineScore: number;
-    freshnessScore: number;
-    activeRidePenalty: number;
-    activeRideOrderPenalty: number;
-    staleLocationPenalty: number;
-    missingLocationPenalty: number;
-    availabilityStatus?: string;
-    recommendationReason?: {
-      basedOn: string;
-      deliveredCountToday: number;
-      totalRouteDistanceMetersToday: number;
-      hasFreshLocation: boolean;
-      online: boolean;
-      hasActiveRide: boolean;
-    };
-  };
-  recommendationScore: number;
-};
-
-type BatchSuggestion = {
-  order: {
-    id: string;
-    externalRef?: string | null;
-    status: string;
-    pickupLat: number;
-    pickupLng: number;
-    dropoffLat: number;
-    dropoffLng: number;
-  };
-  metrics: {
-    pickupDistanceM: number;
-    dropoffDistanceM: number;
-    averageDistanceM: number;
-  };
-  batchScore: number;
-};
-
-type DispatchLogItem = {
-  id: string;
-  orderId: string;
-  recommendedCourierId: string | null;
-  status: string;
-  reason: string | null;
-  createdAt: string;
-  updatedAt: string;
-  recommendedCourier: {
-    id: string;
-    name: string;
-    phone: string;
-    availabilityStatus: string;
-  } | null;
 };
 
 function formatDate(value?: string | null) {
@@ -194,7 +184,7 @@ function formatDate(value?: string | null) {
 
 function formatMeters(value?: number | null) {
   if (value === null || value === undefined) return '-';
-  return `${value} m`;
+  return `${Math.round(value).toLocaleString()} m`;
 }
 
 function formatMinutes(value?: number | null) {
@@ -345,11 +335,11 @@ export default async function OrderDetailPage({
     console.error('Directions fallback used', error);
   }
 
-
   const recommendation = order.dispatchPanel?.recommendation;
   const recommendedCourier = recommendation?.recommendedCourier ?? null;
   const candidates = recommendation?.candidates ?? [];
-  const suggestions = order.dispatchPanel?.batchSuggestions?.suggestions ?? [];
+  const batchSuggestions = order.dispatchPanel?.batchSuggestions?.suggestions ?? [];
+  const batchRules = order.dispatchPanel?.batchSuggestions?.rules;
   const dispatchLogs = order.dispatchLogs ?? [];
 
   return (
@@ -545,55 +535,15 @@ export default async function OrderDetailPage({
                 <div className="mt-4 grid grid-cols-1 gap-3 text-sm text-slate-700 md:grid-cols-3">
                   <div>
                     <span className="font-medium text-slate-900">Delivered Today:</span>{' '}
-                    {recommendedCourier.dailyStats.deliveredCountToday}
+                    {recommendedCourier.dailyStats?.deliveredCountToday ?? '-'}
                   </div>
                   <div>
                     <span className="font-medium text-slate-900">Route Distance Today:</span>{' '}
-                    {recommendedCourier.dailyStats.totalRouteDistanceMetersToday} m
+                    {recommendedCourier.dailyStats?.totalRouteDistanceMetersToday ?? '-'} m
                   </div>
                   <div>
                     <span className="font-medium text-slate-900">ETA:</span>{' '}
-                    {formatMinutes(recommendedCourier.metrics.estimatedPickupEtaMinutes)}
-                  </div>
-                </div>
-
-                <div className="mt-4 rounded-xl bg-white p-4 text-sm text-slate-700">
-                  <div className="mb-3 font-medium text-slate-900">
-                    Why this courier was selected
-                  </div>
-                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                    <div>
-                      <span className="font-medium text-slate-900">Engine:</span>{' '}
-                      {recommendedCourier.metrics.recommendationReason?.basedOn ?? '-'}
-                    </div>
-                    <div>
-                      <span className="font-medium text-slate-900">Fresh location:</span>{' '}
-                      {yesNo(
-                        recommendedCourier.metrics.recommendationReason
-                          ?.hasFreshLocation,
-                      )}
-                    </div>
-                    <div>
-                      <span className="font-medium text-slate-900">Online:</span>{' '}
-                      {yesNo(
-                        recommendedCourier.metrics.recommendationReason?.online,
-                      )}
-                    </div>
-                    <div>
-                      <span className="font-medium text-slate-900">Has active ride:</span>{' '}
-                      {yesNo(
-                        recommendedCourier.metrics.recommendationReason
-                          ?.hasActiveRide,
-                      )}
-                    </div>
-                    <div>
-                      <span className="font-medium text-slate-900">Pickup distance:</span>{' '}
-                      {formatMeters(recommendedCourier.metrics.pickupDistanceM)}
-                    </div>
-                    <div>
-                      <span className="font-medium text-slate-900">Detour:</span>{' '}
-                      {formatMeters(recommendedCourier.constraints.detourMeters)}
-                    </div>
+                    {formatMinutes(recommendedCourier.metrics?.estimatedPickupEtaMinutes)}
                   </div>
                 </div>
 
@@ -602,15 +552,12 @@ export default async function OrderDetailPage({
                     Score breakdown
                   </div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                    <div>Delivered count priority: {recommendedCourier.metrics.deliveredCountPriorityScore}</div>
-                    <div>Route distance priority: {recommendedCourier.metrics.routeDistancePriorityScore}</div>
-                    <div>Distance score: {recommendedCourier.metrics.distanceScore}</div>
-                    <div>Online score: {recommendedCourier.metrics.onlineScore}</div>
-                    <div>Freshness score: {recommendedCourier.metrics.freshnessScore}</div>
-                    <div>Active ride penalty: -{recommendedCourier.metrics.activeRidePenalty}</div>
-                    <div>Active ride order penalty: -{recommendedCourier.metrics.activeRideOrderPenalty}</div>
-                    <div>Stale location penalty: -{recommendedCourier.metrics.staleLocationPenalty}</div>
-                    <div>Missing location penalty: -{recommendedCourier.metrics.missingLocationPenalty}</div>
+                    <div>Pickup distance: {formatMeters(recommendedCourier.metrics?.pickupDistanceM)}</div>
+                    <div>Online: {yesNo(recommendedCourier.online)}</div>
+                    <div>Constraint valid: {yesNo(recommendedCourier.constraints?.valid)}</div>
+                    <div>Detour: {formatMeters(recommendedCourier.constraints?.detourMeters)}</div>
+                    <div>Active stop count: {recommendedCourier.constraints?.activeStopCount ?? '-'}</div>
+                    <div>Reasons: {(recommendedCourier.constraints?.reasons ?? []).join(', ') || '-'}</div>
                   </div>
                 </div>
               </div>
@@ -637,7 +584,6 @@ export default async function OrderDetailPage({
                   <th className="px-4 py-3 text-left">Pickup Distance</th>
                   <th className="px-4 py-3 text-left">ETA</th>
                   <th className="px-4 py-3 text-left">Online</th>
-                  <th className="px-4 py-3 text-left">Fresh Location</th>
                   <th className="px-4 py-3 text-left">Constraints</th>
                   <th className="px-4 py-3 text-left">Score</th>
                   <th className="px-4 py-3 text-left">Action</th>
@@ -658,29 +604,26 @@ export default async function OrderDetailPage({
                       </div>
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {candidate.dailyStats.deliveredCountToday}
+                      {candidate.dailyStats?.deliveredCountToday ?? '-'}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       {formatMeters(
-                        candidate.dailyStats.totalRouteDistanceMetersToday,
+                        candidate.dailyStats?.totalRouteDistanceMetersToday,
                       )}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {formatMeters(candidate.metrics.pickupDistanceM)}
+                      {formatMeters(candidate.metrics?.pickupDistanceM)}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {formatMinutes(candidate.metrics.estimatedPickupEtaMinutes)}
+                      {formatMinutes(candidate.metrics?.estimatedPickupEtaMinutes)}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       {yesNo(candidate.online)}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {yesNo(candidate.location.fresh)}
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">
-                      {candidate.constraints.valid
+                      {candidate.constraints?.valid
                         ? 'Valid'
-                        : candidate.constraints.reasons.join(', ')}
+                        : (candidate.constraints?.reasons ?? []).join(', ') || '-'}
                     </td>
                     <td className="px-4 py-3 font-medium text-slate-900">
                       {candidate.recommendationScore}
@@ -708,7 +651,7 @@ export default async function OrderDetailPage({
                 {candidates.length === 0 && (
                   <tr>
                     <td
-                      colSpan={10}
+                      colSpan={9}
                       className="px-4 py-8 text-center text-slate-500"
                     >
                       No candidates found.
@@ -717,6 +660,131 @@ export default async function OrderDetailPage({
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">
+                Batch Suggestions
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Bu order başka bir rotaya eklenirse olası sequence ve kurallar.
+              </p>
+            </div>
+
+            <div className="text-sm text-slate-500">
+              Max stop: {batchRules?.maxStop ?? '-'} · Max detour:{' '}
+              {formatMeters(batchRules?.maxDetour)}
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-4">
+            {batchSuggestions.map((suggestion) => (
+              <div
+                key={suggestion.orderId}
+                className={`rounded-2xl border p-5 ${
+                  suggestion.valid
+                    ? 'border-emerald-200 bg-emerald-50'
+                    : 'border-amber-200 bg-amber-50'
+                }`}
+              >
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">
+                      Candidate Order: {suggestion.orderId}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs font-medium ${
+                          suggestion.valid
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {suggestion.valid ? 'VALID' : 'INVALID'}
+                      </span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                        Score: {suggestion.score ?? '-'}
+                      </span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                        Projected Stops: {suggestion.stopCount ?? '-'}
+                      </span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                        Detour: {formatMeters(suggestion.detour)}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 text-sm text-slate-700">
+                      <span className="font-medium text-slate-900">Reasons:</span>{' '}
+                      {(suggestion.reasons ?? []).length > 0
+                        ? (suggestion.reasons ?? []).join(', ')
+                        : 'No blocking reason'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-white/70 text-slate-600">
+                      <tr>
+                        <th className="px-4 py-3 text-left">Seq</th>
+                        <th className="px-4 py-3 text-left">Type</th>
+                        <th className="px-4 py-3 text-left">Order</th>
+                        <th className="px-4 py-3 text-left">Coordinates</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(suggestion.sequence ?? []).map((stop) => (
+                        <tr
+                          key={stop.stopId}
+                          className="border-t border-slate-200/70"
+                        >
+                          <td className="px-4 py-3 font-medium text-slate-900">
+                            {stop.sequence}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            <span
+                              className={`rounded-full px-2 py-1 text-xs font-medium ${
+                                stop.type === 'pickup'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-emerald-100 text-emerald-700'
+                              }`}
+                            >
+                              {stop.type}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {stop.orderId}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {stop.lat}, {stop.lng}
+                          </td>
+                        </tr>
+                      ))}
+
+                      {(suggestion.sequence ?? []).length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={4}
+                            className="px-4 py-6 text-center text-slate-500"
+                          >
+                            Sequence preview not available.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+
+            {batchSuggestions.length === 0 && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+                No batch suggestions found.
+              </div>
+            )}
           </div>
         </div>
 
@@ -770,9 +838,7 @@ export default async function OrderDetailPage({
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Notes
-            </h2>
+            <h2 className="text-lg font-semibold text-slate-900">Notes</h2>
 
             <div className="mt-4 space-y-4 text-sm text-slate-700">
               <div>
@@ -795,65 +861,26 @@ export default async function OrderDetailPage({
 
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-semibold text-slate-900">
-              Batch Suggestions
+              Current Courier Snapshot
             </h2>
 
-            <div className="mt-4 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-100 text-slate-600">
-                  <tr>
-                    <th className="px-4 py-3 text-left">Order</th>
-                    <th className="px-4 py-3 text-left">Status</th>
-                    <th className="px-4 py-3 text-left">Pickup Distance</th>
-                    <th className="px-4 py-3 text-left">Dropoff Distance</th>
-                    <th className="px-4 py-3 text-left">Avg Distance</th>
-                    <th className="px-4 py-3 text-left">Batch Score</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {suggestions.map((suggestion) => (
-                    <tr
-                      key={suggestion.order.id}
-                      className="border-t border-slate-200"
-                    >
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-slate-900">
-                          {suggestion.order.externalRef ?? suggestion.order.id}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {suggestion.order.id}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {suggestion.order.status}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {suggestion.metrics.pickupDistanceM}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {suggestion.metrics.dropoffDistanceM}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {suggestion.metrics.averageDistanceM}
-                      </td>
-                      <td className="px-4 py-3 font-medium text-slate-900">
-                        {suggestion.batchScore}
-                      </td>
-                    </tr>
-                  ))}
-
-                  {suggestions.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={6}
-                        className="px-4 py-8 text-center text-slate-500"
-                      >
-                        No batch suggestions found.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+            <div className="mt-4 space-y-3 text-sm text-slate-700">
+              <div>
+                <span className="font-medium text-slate-900">Courier:</span>{' '}
+                {order.courier?.name ?? '-'}
+              </div>
+              <div>
+                <span className="font-medium text-slate-900">Phone:</span>{' '}
+                {order.courier?.phone ?? '-'}
+              </div>
+              <div>
+                <span className="font-medium text-slate-900">Availability:</span>{' '}
+                {order.courier?.availabilityStatus ?? '-'}
+              </div>
+              <div>
+                <span className="font-medium text-slate-900">Last Seen:</span>{' '}
+                {formatDate(order.courier?.lastSeenAt)}
+              </div>
             </div>
           </div>
         </div>
