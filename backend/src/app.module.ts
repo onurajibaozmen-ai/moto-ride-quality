@@ -17,6 +17,7 @@ import { GeocodingModule } from './geocoding/geocoding.module';
     TelemetryModule,
     OrdersModule,
     DashboardModule,
+    GeocodingModule,
   ],
 })
 export class AppModule {}
