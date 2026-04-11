@@ -92,6 +92,19 @@ export class OrdersController {
     return this.ordersService.getNextStopForCourier(id);
   }
 
+  @Post('couriers/:id/heartbeat')
+  heartbeatCourier(@Param('id') id: string) {
+    return this.ordersService.heartbeatCourier(id);
+  }
+
+  @Post('couriers/:id/presence')
+  updateCourierPresence(
+    @Param('id') id: string,
+    @Body() body: { state: 'READY' | 'BUSY' | 'OFFLINE' },
+  ) {
+    return this.ordersService.updateCourierPresence(id, body.state);
+  }
+
   @Get(':id')
   getOrderById(@Param('id') id: string) {
     return this.ordersService.getOrderById(id);

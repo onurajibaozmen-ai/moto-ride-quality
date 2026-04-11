@@ -10,22 +10,15 @@ class OrdersApi {
     return _decode(response.data);
   }
 
-  Future<Map<String, dynamic>> startRide(String courierId) async {
-    final response = await ApiClient.dio.post(
-      '/rides/start',
-      data: {
-        'courierId': courierId,
-      },
+  Future<Map<String, dynamic>?> getNextStop(String courierId) async {
+    final response = await ApiClient.dio.get(
+      '/orders/couriers/$courierId/next-stop',
     );
-    return _decode(response.data);
-  }
 
-  Future<Map<String, dynamic>> endRide(String rideId) async {
-    final response = await ApiClient.dio.patch(
-      '/rides/$rideId/end',
-      data: {},
-    );
-    return _decode(response.data);
+    final decoded = _decode(response.data);
+
+    if (decoded.isEmpty) return null;
+    return decoded;
   }
 
   Future<Map<String, dynamic>> pickupOrder(String orderId) async {
@@ -47,17 +40,6 @@ class OrdersApi {
       },
     );
     return _decode(response.data);
-  }
-
-  Future<Map<String, dynamic>?> getNextStop(String courierId) async {
-    final response = await ApiClient.dio.get(
-      '/orders/couriers/$courierId/next-stop',
-    );
-
-    final decoded = _decode(response.data);
-
-    if (decoded.isEmpty) return null;
-    return decoded;
   }
 
   Map<String, dynamic> _decode(dynamic response) {

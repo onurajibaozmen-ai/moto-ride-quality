@@ -1,69 +1,99 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../data/courier_presence_api.dart';
 import '../data/orders_api.dart';
-import '../data/telemetry_api.dart';
-import '../data/telemetry_queue.dart';
 
 class HomePage extends StatefulWidget {
   final String courierId;
-  final String? activeRideId;
 
   const HomePage({
     super.key,
     required this.courierId,
-    this.activeRideId,
   });
 
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  late final OrdersApi _ordersApi;
-  late final TelemetryApi _telemetryApi;
-  late final TelemetryQueue _telemetryQueue;
-
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  final OrdersApi _ordersApi = OrdersApi();
+  final CourierPresenceApi _presenceApi = CourierPresenceApi();
   final TextEditingController _deliveryNoteController = TextEditingController();
 
   Map<String, dynamic>? _nextStop;
   List<Map<String, dynamic>> _assignedOrders = [];
+
   bool _loadingNextStop = false;
   bool _loadingOrders = false;
-  bool _delivering = false;
   bool _pickingUp = false;
-  Timer? _flushTimer;
+  bool _delivering = false;
+
+  Timer? _heartbeatTimer;
 
   @override
   void initState() {
     super.initState();
-
-    _ordersApi = OrdersApi();
-    _telemetryApi = TelemetryApi();
-    _telemetryQueue = TelemetryQueue(_telemetryApi);
-    _ensureLocationPermission();
-
+    WidgetsBinding.instance.addObserver(this);
     _bootstrap();
+    _startHeartbeat();
+  }
 
-    _flushTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-      await _telemetryQueue.flush(
-        courierId: widget.courierId,
-        rideId: widget.activeRideId,
-      );
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _heartbeatTimer?.cancel();
+    unawaited(_presenceApi.setOffline(widget.courierId));
+    _deliveryNoteController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _bootstrap();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(_presenceApi.setOffline(widget.courierId));
+    }
+  }
+
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
+      try {
+        await _presenceApi.heartbeat(widget.courierId);
+      } catch (e) {
+        debugPrint('Heartbeat failed: $e');
+      }
     });
   }
 
+  Future<void> _bootstrap() async {
+    await _ensureLocationPermission();
+
+    try {
+      await _presenceApi.heartbeat(widget.courierId);
+    } catch (e) {
+      debugPrint('Initial heartbeat failed: $e');
+    }
+
+    await _loadAssignedOrders();
+    await _loadNextStop();
+  }
+
   Future<void> _ensureLocationPermission() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       _showMessage('Konum servisleri kapalı.');
       return;
     }
 
-    LocationPermission permission = await Geolocator.checkPermission();
+    var permission = await Geolocator.checkPermission();
 
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
@@ -78,31 +108,7 @@ class _HomePageState extends State<HomePage> {
       _showMessage('Konum izni kalıcı reddedildi. Ayarlardan açmalısın.');
       return;
     }
-
-    _showMessage('Konum izni hazır.');
   }
-
-  Future<void> _bootstrap() async {
-    await _loadAssignedOrders();
-    await _loadNextStop();
-  }
-
-  Future<void> _debugCurrentLocation() async {
-    try {
-      final position = await Geolocator.getCurrentPosition();
-      debugPrint('CURRENT LOCATION => ${position.latitude}, ${position.longitude}');
-    } catch (e) {
-      debugPrint('Location read failed: $e');
-    }
-  }
-
-  @override
-  void dispose() {
-    _flushTimer?.cancel();
-    _deliveryNoteController.dispose();
-    super.dispose();
-  }
-
 
   Future<void> _loadAssignedOrders() async {
     setState(() => _loadingOrders = true);
@@ -168,6 +174,7 @@ class _HomePageState extends State<HomePage> {
 
     try {
       await _ordersApi.pickupOrder(orderId);
+      await _presenceApi.setBusy(widget.courierId);
       _showMessage('Pickup başarılı.');
       await _bootstrap();
     } catch (e) {
@@ -256,6 +263,19 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  String _formatAvailability(String? status) {
+    switch (status) {
+      case 'READY':
+        return 'READY';
+      case 'DELIVERY':
+        return 'BUSY';
+      case 'OFFLINE':
+        return 'OFFLINE';
+      default:
+        return status ?? '-';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final nextStopType = _nextStop?['type']?.toString() ?? '-';
@@ -265,6 +285,11 @@ class _HomePageState extends State<HomePage> {
     final nextStopLat = _nextStop?['lat']?.toString() ?? '-';
     final nextStopLng = _nextStop?['lng']?.toString() ?? '-';
     final nextStopSource = _nextStop?['source']?.toString() ?? '-';
+    final nextStopSequence = _nextStop?['sequence']?.toString() ?? '-';
+    final remainingStopCount =
+        _nextStop?['remainingStopCount']?.toString() ?? '-';
+    final availability =
+        _formatAvailability(_nextStop?['availabilityStatus']?.toString());
 
     final isPickup = nextStopType == 'pickup';
     final isDropoff = nextStopType == 'dropoff';
@@ -328,6 +353,9 @@ class _HomePageState extends State<HomePage> {
                           const SizedBox(height: 12),
                           Text('Order: $nextStopOrder'),
                           Text('Type: $nextStopType'),
+                          Text('Availability: $availability'),
+                          Text('Sequence: $nextStopSequence'),
+                          Text('Remaining Stops: $remainingStopCount'),
                           Text('Lat: $nextStopLat'),
                           Text('Lng: $nextStopLng'),
                           Text('Source: $nextStopSource'),

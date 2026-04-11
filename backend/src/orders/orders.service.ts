@@ -1993,4 +1993,71 @@ private buildBatchSuggestions(
     if (diffSeconds < 0) return 'early';
     return 'on_time';
   }
+
+  async heartbeatCourier(courierId: string) {
+  const courier = await this.prisma.user.findFirst({
+    where: {
+      id: courierId,
+      role: UserRole.COURIER,
+      isActive: true,
+    },
+  });
+
+  if (!courier) {
+    throw new NotFoundException('Courier not found');
+  }
+
+  const activeWorkCount = await this.prisma.order.count({
+    where: {
+      assignedCourierId: courierId,
+      status: {
+        in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
+      },
+    },
+  });
+
+  const nextAvailability =
+    activeWorkCount > 0
+      ? CourierAvailabilityStatus.DELIVERY
+      : CourierAvailabilityStatus.READY;
+
+  return this.prisma.user.update({
+    where: { id: courierId },
+    data: {
+      availabilityStatus: nextAvailability,
+      availabilityUpdatedAt: new Date(),
+      lastSeenAt: new Date(),
+    },
+  });
+}
+
+async updateCourierPresence(
+  courierId: string,
+  state: 'READY' | 'BUSY' | 'OFFLINE',
+) {
+  if (state === 'OFFLINE') {
+    return this.prisma.user.update({
+      where: { id: courierId },
+      data: {
+        availabilityStatus: CourierAvailabilityStatus.OFFLINE,
+        availabilityUpdatedAt: new Date(),
+        lastSeenAt: new Date(),
+      },
+    });
+  }
+
+  if (state === 'BUSY') {
+    return this.prisma.user.update({
+      where: { id: courierId },
+      data: {
+        availabilityStatus: CourierAvailabilityStatus.DELIVERY,
+        availabilityUpdatedAt: new Date(),
+        lastSeenAt: new Date(),
+      },
+    });
+  }
+
+  // READY
+  return this.heartbeatCourier(courierId);
+}
 }
