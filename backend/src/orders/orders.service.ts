@@ -772,6 +772,94 @@ if (!rideId) {
     });
   }
 
+  async markPickedUpAllAtStop(orderId: string) {
+  const anchorOrder = await this.prisma.order.findUnique({
+    where: { id: orderId },
+  });
+
+  if (!anchorOrder) {
+    throw new NotFoundException('Order not found');
+  }
+
+  if (anchorOrder.status !== OrderStatus.ASSIGNED) {
+    throw new BadRequestException('Order must be ASSIGNED before pickup');
+  }
+
+  if (!anchorOrder.rideId) {
+    return this.markPickedUp(orderId);
+  }
+
+  const sameRideAssignedOrders = await this.prisma.order.findMany({
+    where: {
+      rideId: anchorOrder.rideId,
+      status: OrderStatus.ASSIGNED,
+    },
+    orderBy: {
+      createdAt: 'asc',
+    },
+  });
+
+  const pickupRadiusMeters = 50;
+
+  const ordersAtSamePickupStop = sameRideAssignedOrders.filter((candidate) => {
+    const distance = this.calculateDistanceMeters(
+      anchorOrder.pickupLat,
+      anchorOrder.pickupLng,
+      candidate.pickupLat,
+      candidate.pickupLng,
+    );
+
+    return distance <= pickupRadiusMeters;
+  });
+
+  const now = new Date();
+
+  const updatedOrders = await this.prisma.$transaction(async (tx) => {
+  const results: Array<
+    Awaited<ReturnType<typeof tx.order.update>>
+  > = [];
+
+    for (const order of ordersAtSamePickupStop) {
+      const updated = await tx.order.update({
+        where: { id: order.id },
+        data: {
+          status: OrderStatus.PICKED_UP,
+          pickedUpAt: now,
+          actualPickupTime: now,
+        },
+        include: {
+          courier: true,
+          ride: true,
+        },
+      });
+
+      results.push(updated);
+    }
+
+    if (anchorOrder.assignedCourierId) {
+      await tx.user.update({
+        where: { id: anchorOrder.assignedCourierId },
+        data: {
+          availabilityStatus: CourierAvailabilityStatus.DELIVERY,
+          availabilityUpdatedAt: new Date(),
+          lastSeenAt: new Date(),
+        },
+      });
+    }
+
+    return results;
+  });
+
+  return {
+    success: true,
+    pickupMode: 'all_at_stop',
+    rideId: anchorOrder.rideId,
+    pickedUpCount: updatedOrders.length,
+    pickedUpOrderIds: updatedOrders.map((order) => order.id),
+    orders: updatedOrders,
+  };
+}
+
   async markDelivered(orderId: string, payload?: { note?: string }) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },

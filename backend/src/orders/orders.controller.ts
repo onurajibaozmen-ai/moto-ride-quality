@@ -129,6 +129,11 @@ export class OrdersController {
     return this.ordersService.markPickedUp(id);
   }
 
+  @Patch(':id/pickup-all')
+  markPickedUpAllAtStop(@Param('id') id: string) {
+    return this.ordersService.markPickedUpAllAtStop(id);
+  }
+
   @Patch(':id/deliver')
   markDelivered(
     @Param('id') id: string,
