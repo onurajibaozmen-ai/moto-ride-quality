@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import SimpleMap from '@/components/maps/simple-map';
+import AddToRideButton from '@/components/orders/add-to-ride-button';
 import {
   apiFetch,
   approveAutoAssign,
@@ -189,7 +190,6 @@ type OrderDetailResponse = {
       candidates: CandidateCourier[];
     };
     batchSuggestions?: {
-      targetOrderId?: string;
       rules?: {
         maxStop?: number;
         maxDetour?: number;
@@ -711,107 +711,164 @@ export default async function OrderDetailPage({
                 suggestion.order?.id ||
                 `batch-suggestion-${index}`;
 
+              const candidateOrderId =
+                suggestion.order?.id ?? suggestion.orderId ?? null;
+
+              const candidateOrderLabel =
+                suggestion.order?.externalRef ||
+                suggestion.order?.id ||
+                suggestion.orderId ||
+                '-';
+
+              const isValid =
+                suggestion.valid ?? suggestion.insertionPreview?.valid ?? false;
+
+              const score = suggestion.score ?? suggestion.batchScore ?? null;
+
+              const projectedStopCount =
+                suggestion.stopCount ??
+                suggestion.insertionPreview?.projectedStopCount ??
+                null;
+
+              const projectedDetour =
+                suggestion.detour ??
+                suggestion.insertionPreview?.projectedDetourMeters ??
+                null;
+
+              const reasons =
+                suggestion.reasons ??
+                suggestion.insertionPreview?.reasons ??
+                [];
+
+              const projectedSequence =
+                suggestion.sequence ??
+                suggestion.insertionPreview?.projectedSequence ??
+                [];
+
               return (
                 <div
                   key={suggestionKey}
-                className={`rounded-2xl border p-5 ${
-                  suggestion.valid
-                    ? 'border-emerald-200 bg-emerald-50'
-                    : 'border-amber-200 bg-amber-50'
-                }`}
-              >
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    
-                    <div className="text-lg font-semibold text-slate-900">
-                      Candidate Order: {suggestion.orderId}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <span
-                        className={`rounded-full px-2 py-1 text-xs font-medium ${
-                          suggestion.valid
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {suggestion.valid ? 'VALID' : 'INVALID'}
-                      </span>
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                        Score: {suggestion.score ?? '-'}
-                      </span>
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                        Projected Stops: {suggestion.stopCount ?? '-'}
-                      </span>
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                        Detour: {formatMeters(suggestion.detour)}
-                      </span>
-                    </div>
+                  className={`rounded-2xl border p-5 ${
+                    isValid
+                      ? 'border-emerald-200 bg-emerald-50'
+                      : 'border-amber-200 bg-amber-50'
+                  }`}
+                >
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="w-full">
+                      <div className="text-lg font-semibold text-slate-900">
+                        Candidate Order: {candidateOrderLabel}
+                      </div>
 
-                    <div className="mt-3 text-sm text-slate-700">
-                      <span className="font-medium text-slate-900">Reasons:</span>{' '}
-                      {(suggestion.reasons ?? []).length > 0
-                        ? (suggestion.reasons ?? []).join(', ')
-                        : 'No blocking reason'}
+                      {suggestion.order?.pickupAddress || suggestion.order?.dropoffAddress ? (
+                        <div className="mt-2 space-y-1 text-sm text-slate-600">
+                          <div>
+                            <span className="font-medium text-slate-900">Pickup:</span>{' '}
+                            {suggestion.order?.pickupAddress ?? '-'}
+                          </div>
+                          <div>
+                            <span className="font-medium text-slate-900">Dropoff:</span>{' '}
+                            {suggestion.order?.dropoffAddress ?? '-'}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span
+                          className={`rounded-full px-2 py-1 text-xs font-medium ${
+                            isValid
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {isValid ? 'VALID' : 'INVALID'}
+                        </span>
+
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                          Score: {score ?? '-'}
+                        </span>
+
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                          Projected Stops: {projectedStopCount ?? '-'}
+                        </span>
+
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
+                          Detour: {formatMeters(projectedDetour)}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 text-sm text-slate-700">
+                        <span className="font-medium text-slate-900">Reasons:</span>{' '}
+                        {reasons.length > 0 ? reasons.join(', ') : 'No blocking reason'}
+                      </div>
+
+                      <div className="mt-4">
+                        {candidateOrderId ? (
+                          <AddToRideButton
+                            orderId={order.id}
+                            candidateOrderId={candidateOrderId}
+                          />
+                        ) : null}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="mt-4 overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-white/70 text-slate-600">
-                      <tr>
-                        <th className="px-4 py-3 text-left">Seq</th>
-                        <th className="px-4 py-3 text-left">Type</th>
-                        <th className="px-4 py-3 text-left">Order</th>
-                        <th className="px-4 py-3 text-left">Coordinates</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(suggestion.sequence ?? []).map((stop, stopIndex) => (
-                        <tr
-                          key={
-                            stop.stopId ||
-                            `${suggestionKey}-${stop.orderId}-${stop.type}-${stopIndex}`
-                          }
-                          className="border-t border-slate-200/70"
-                        >
-                          <td className="px-4 py-3 font-medium text-slate-900">
-                            {stop.sequence}
-                          </td>
-                          <td className="px-4 py-3 text-slate-700">
-                            <span
-                              className={`rounded-full px-2 py-1 text-xs font-medium ${
-                                stop.type === 'pickup'
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-emerald-100 text-emerald-700'
-                              }`}
-                            >
-                              {stop.type}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-slate-700">
-                            {stop.orderId}
-                          </td>
-                          <td className="px-4 py-3 text-slate-700">
-                            {stop.lat}, {stop.lng}
-                          </td>
-                        </tr>
-                      ))}
-
-                      {(suggestion.sequence ?? []).length === 0 && (
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-white/70 text-slate-600">
                         <tr>
-                          <td
-                            colSpan={4}
-                            className="px-4 py-6 text-center text-slate-500"
-                          >
-                            Sequence preview not available.
-                          </td>
+                          <th className="px-4 py-3 text-left">Seq</th>
+                          <th className="px-4 py-3 text-left">Type</th>
+                          <th className="px-4 py-3 text-left">Order</th>
+                          <th className="px-4 py-3 text-left">Coordinates</th>
                         </tr>
-                      )}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {projectedSequence.map((stop, stopIndex) => (
+                          <tr
+                            key={
+                              stop.stopId ||
+                              `${suggestionKey}-${stop.orderId}-${stop.type}-${stopIndex}`
+                            }
+                            className="border-t border-slate-200/70"
+                          >
+                            <td className="px-4 py-3 font-medium text-slate-900">
+                              {stop.sequence}
+                            </td>
+                            <td className="px-4 py-3 text-slate-700">
+                              <span
+                                className={`rounded-full px-2 py-1 text-xs font-medium ${
+                                  stop.type === 'pickup'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-emerald-100 text-emerald-700'
+                                }`}
+                              >
+                                {stop.type}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-slate-700">
+                              {stop.orderRef ?? stop.orderId}
+                            </td>
+                            <td className="px-4 py-3 text-slate-700">
+                              {stop.lat}, {stop.lng}
+                            </td>
+                          </tr>
+                        ))}
+
+                        {projectedSequence.length === 0 && (
+                          <tr>
+                            <td
+                              colSpan={4}
+                              className="px-4 py-6 text-center text-slate-500"
+                            >
+                              Sequence preview not available.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
               );
             })}
 
