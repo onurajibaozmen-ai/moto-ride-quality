@@ -375,8 +375,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                   ? _pickupOrder
                                   : null,
                               child: Text(
-                                _pickingUp ? 'Picking up...' : 'Pickup Order',
-                              ),
+  _pickingUp ? 'Picking up...' : 'Pickup All',
+),
                             ),
                           ),
                         ],
