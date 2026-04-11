@@ -60,122 +60,140 @@ export class OrdersService {
     private readonly geocodingService: GeocodingService,
   ) {}
 
-  async createOrder(payload: {
-    externalRef?: string;
+async createOrder(payload: {
+  externalRef?: string;
 
-    pickupLat?: number;
-    pickupLng?: number;
-    dropoffLat?: number;
-    dropoffLng?: number;
+  pickupLat?: number;
+  pickupLng?: number;
+  dropoffLat?: number;
+  dropoffLng?: number;
 
-    pickupAddress?: string;
-    dropoffAddress?: string;
+  pickupAddress?: string;
+  dropoffAddress?: string;
 
-    estimatedPickupTime?: string;
-    estimatedDeliveryTime?: string;
-    notes?: string;
-  }) {
-    const hasPickupCoordinates =
-      typeof payload.pickupLat === 'number' &&
-      typeof payload.pickupLng === 'number';
+  estimatedPickupTime?: string;
+  estimatedDeliveryTime?: string;
+  notes?: string;
+}) {
+  const hasPickupCoordinates =
+    typeof payload.pickupLat === 'number' &&
+    typeof payload.pickupLng === 'number';
 
-    const hasDropoffCoordinates =
-      typeof payload.dropoffLat === 'number' &&
-      typeof payload.dropoffLng === 'number';
+  const hasDropoffCoordinates =
+    typeof payload.dropoffLat === 'number' &&
+    typeof payload.dropoffLng === 'number';
 
-    const hasPickupAddress = !!payload.pickupAddress?.trim();
-    const hasDropoffAddress = !!payload.dropoffAddress?.trim();
+  const hasPickupAddress = !!payload.pickupAddress?.trim();
+  const hasDropoffAddress = !!payload.dropoffAddress?.trim();
 
-    if ((!hasPickupCoordinates && !hasPickupAddress) ||
-        (!hasDropoffCoordinates && !hasDropoffAddress)) {
-      throw new BadRequestException(
-        'Either coordinates or addresses must be provided for pickup and dropoff',
-      );
-    }
+  if ((!hasPickupCoordinates && !hasPickupAddress) ||
+      (!hasDropoffCoordinates && !hasDropoffAddress)) {
+    throw new BadRequestException(
+      'Either coordinates or addresses must be provided for pickup and dropoff',
+    );
+  }
 
-    let pickupLat = payload.pickupLat;
-    let pickupLng = payload.pickupLng;
-    let dropoffLat = payload.dropoffLat;
-    let dropoffLng = payload.dropoffLng;
+  let pickupLat = payload.pickupLat;
+  let pickupLng = payload.pickupLng;
+  let dropoffLat = payload.dropoffLat;
+  let dropoffLng = payload.dropoffLng;
 
-    let pickupFormattedAddress: string | null = null;
-    let dropoffFormattedAddress: string | null = null;
-    let pickupPlaceId: string | null = null;
-    let dropoffPlaceId: string | null = null;
+  let pickupFormattedAddress: string | null = null;
+  let dropoffFormattedAddress: string | null = null;
+  let pickupPlaceId: string | null = null;
+  let dropoffPlaceId: string | null = null;
 
-    if (!hasPickupCoordinates && hasPickupAddress) {
-      const pickupGeocode = await this.geocodingService.geocodeAddress(
-        payload.pickupAddress!.trim(),
-      );
+  if (!hasPickupCoordinates && hasPickupAddress) {
+    const pickupGeocode = await this.geocodingService.geocodeAddress(
+      payload.pickupAddress!.trim(),
+    );
 
-      pickupLat = pickupGeocode.lat;
-      pickupLng = pickupGeocode.lng;
-      pickupFormattedAddress = pickupGeocode.formattedAddress;
-      pickupPlaceId = pickupGeocode.placeId;
-    }
+    pickupLat = pickupGeocode.lat;
+    pickupLng = pickupGeocode.lng;
+    pickupFormattedAddress = pickupGeocode.formattedAddress;
+    pickupPlaceId = pickupGeocode.placeId;
+  }
 
-    if (!hasDropoffCoordinates && hasDropoffAddress) {
-      const dropoffGeocode = await this.geocodingService.geocodeAddress(
-        payload.dropoffAddress!.trim(),
-      );
+  if (!hasDropoffCoordinates && hasDropoffAddress) {
+    const dropoffGeocode = await this.geocodingService.geocodeAddress(
+      payload.dropoffAddress!.trim(),
+    );
 
-      dropoffLat = dropoffGeocode.lat;
-      dropoffLng = dropoffGeocode.lng;
-      dropoffFormattedAddress = dropoffGeocode.formattedAddress;
-      dropoffPlaceId = dropoffGeocode.placeId;
-    }
+    dropoffLat = dropoffGeocode.lat;
+    dropoffLng = dropoffGeocode.lng;
+    dropoffFormattedAddress = dropoffGeocode.formattedAddress;
+    dropoffPlaceId = dropoffGeocode.placeId;
+  }
 
-    if (
-      typeof pickupLat !== 'number' ||
-      typeof pickupLng !== 'number' ||
-      typeof dropoffLat !== 'number' ||
-      typeof dropoffLng !== 'number'
-    ) {
-      throw new BadRequestException(
-        'Valid pickup and dropoff coordinates could not be resolved',
-      );
-    }
+  if (
+    typeof pickupLat !== 'number' ||
+    typeof pickupLng !== 'number' ||
+    typeof dropoffLat !== 'number' ||
+    typeof dropoffLng !== 'number'
+  ) {
+    throw new BadRequestException(
+      'Valid pickup and dropoff coordinates could not be resolved',
+    );
+  }
 
-    const created = await this.prisma.order.create({
-      data: {
-        externalRef: payload.externalRef ?? null,
+  const created = await this.prisma.order.create({
+    data: {
+      externalRef: payload.externalRef ?? null,
+      pickupLat,
+      pickupLng,
+      dropoffLat,
+      dropoffLng,
+      pickupAddress: payload.pickupAddress?.trim() ?? null,
+      dropoffAddress: payload.dropoffAddress?.trim() ?? null,
+      pickupFormattedAddress,
+      dropoffFormattedAddress,
+      pickupPlaceId,
+      dropoffPlaceId,
+      estimatedPickupTime: payload.estimatedPickupTime
+        ? new Date(payload.estimatedPickupTime)
+        : null,
+      estimatedDeliveryTime: payload.estimatedDeliveryTime
+        ? new Date(payload.estimatedDeliveryTime)
+        : null,
+      notes: payload.notes ?? null,
+      status: OrderStatus.PENDING,
+    },
+    include: {
+      courier: true,
+      ride: true,
+    },
+  });
 
-        pickupLat,
-        pickupLng,
-        dropoffLat,
-        dropoffLng,
+  const trigger = await this.getDispatchTriggerCheck();
 
-        pickupAddress: payload.pickupAddress?.trim() ?? null,
-        dropoffAddress: payload.dropoffAddress?.trim() ?? null,
-        pickupFormattedAddress,
-        dropoffFormattedAddress,
-        pickupPlaceId,
-        dropoffPlaceId,
+  let autoRecommendationPreview: Awaited<
+    ReturnType<OrdersService['recommendCourier']>
+  > | null = null;
 
-        status: OrderStatus.PENDING,
-        notes: payload.notes ?? null,
-        estimatedPickupTime: payload.estimatedPickupTime
-          ? new Date(payload.estimatedPickupTime)
-          : null,
-        estimatedDeliveryTime: payload.estimatedDeliveryTime
-          ? new Date(payload.estimatedDeliveryTime)
-          : null,
-      },
-    });
-
-    let autoRecommendationPreview: any = null;
-
+  if (trigger.triggerSatisfied) {
     try {
       autoRecommendationPreview = await this.recommendCourier(created.id);
-    } catch (error) {
+    } catch {
       autoRecommendationPreview = null;
     }
-
-    return {
-      ...created,
-      autoRecommendationPreview,
-    };
   }
+
+  await this.createDispatchLog({
+    orderId: created.id,
+    recommendation: autoRecommendationPreview,
+    triggerSnapshot: trigger,
+    status: DispatchDecisionStatus.PENDING,
+    reason: autoRecommendationPreview
+      ? 'order_created_auto_recommendation_generated'
+      : 'order_created_no_recommendation',
+  });
+
+  return {
+    ...created,
+    dispatchTrigger: trigger,
+    autoRecommendationPreview,
+  };
+}
 
   async listOrders(params: ListOrdersParams) {
     const page = Math.max(1, params.page ?? 1);
@@ -221,97 +239,159 @@ export class OrdersService {
   }
 
   async getOrderById(id: string) {
-    const order = await this.prisma.order.findUnique({
-        where: { id },
-        include: {
-        courier: true,
-        ride: true,
-        },
-    });
+  const order = await this.prisma.order.findUnique({
+    where: { id },
+    include: {
+      courier: true,
+      ride: true,
+    },
+  });
 
-    if (!order) {
-        throw new NotFoundException('Order not found');
-    }
+  if (!order) {
+    throw new NotFoundException('Order not found');
+  }
 
-    const dispatchLogs = await this.prisma.dispatchDecisionLog.findMany({
-        where: { orderId: id },
-        orderBy: { createdAt: 'desc' },
-        include: {
-        recommendedCourier: {
-            select: {
-            id: true,
-            name: true,
-            phone: true,
-            availabilityStatus: true,
+  const dispatchLogs = await this.getOrderDispatchLogs(id);
+
+  let recommendation: Awaited<
+    ReturnType<OrdersService['recommendCourier']>
+  > | null = null;
+
+  try {
+    recommendation = await this.recommendCourier(id);
+  } catch {
+    recommendation = null;
+  }
+
+  const batchCandidates = await this.prisma.order.findMany({
+    where: {
+      id: { not: id },
+      status: OrderStatus.PENDING,
+    },
+    orderBy: {
+      createdAt: 'desc',
+    },
+    take: 20,
+  });
+
+  const batchSuggestions = this.buildBatchSuggestions(order, batchCandidates);
+
+  return {
+    ...order,
+    dispatchPanel: {
+      order: {
+        id: order.id,
+        externalRef: order.externalRef,
+        status: order.status,
+        assignedCourierId: order.assignedCourierId,
+        rideId: order.rideId,
+        pickupLat: order.pickupLat,
+        pickupLng: order.pickupLng,
+        dropoffLat: order.dropoffLat,
+        dropoffLng: order.dropoffLng,
+      },
+      currentAssignment: order.courier
+        ? {
+            courier: {
+              id: order.courier.id,
+              name: order.courier.name,
+              phone: order.courier.phone,
+              availabilityStatus: order.courier.availabilityStatus,
             },
-        },
-        },
-    });
-
-    let recommendation: any = {
+            ride: order.ride
+              ? {
+                  id: order.ride.id,
+                  status: order.ride.status,
+                  startedAt: order.ride.startedAt,
+                }
+              : null,
+          }
+        : null,
+      recommendation: recommendation ?? {
         recommendedCourier: null,
         candidates: [],
-    };
-
-    try {
-        recommendation = await this.recommendCourier(id);
-    } catch (error) {
-        recommendation = {
-        recommendedCourier: null,
-        candidates: [],
-        };
-    }
-
-    const pendingOrders = await this.prisma.order.findMany({
-        where: {
-        id: { not: id },
-        status: 'PENDING',
+      },
+      batchSuggestions: {
+        rules: {
+          maxStop: BATCH_RULES.MAX_STOPS,
+          maxDetour: BATCH_RULES.MAX_DETOUR_METERS,
         },
-        take: 20,
-        orderBy: { createdAt: 'asc' },
+        suggestions: batchSuggestions,
+      },
+    },
+    dispatchLogs,
+  };
+}
+
+  async addOrderToRide(orderId: string, candidateOrderId: string) {
+  const baseOrder = await this.prisma.order.findUnique({
+    where: { id: orderId },
+  });
+
+  if (!baseOrder) {
+    throw new NotFoundException('Base order not found');
+  }
+
+  const candidateOrder = await this.prisma.order.findUnique({
+    where: { id: candidateOrderId },
+  });
+
+  if (!candidateOrder) {
+    throw new NotFoundException('Candidate order not found');
+  }
+
+  if (candidateOrder.status !== OrderStatus.PENDING) {
+    throw new BadRequestException('Candidate order is not pending');
+  }
+
+  let rideId = baseOrder.rideId;
+  const courierId = baseOrder.assignedCourierId;
+
+if (!courierId) {
+  throw new BadRequestException(
+    'Base order must be assigned to a courier before adding another order to the ride',
+  );
+}
+
+if (!rideId) {
+  const ride = await this.prisma.ride.create({
+    data: {
+      userId: courierId,
+      status: RideStatus.ACTIVE,
+      startedAt: new Date(),
+    },
+  });
+
+    rideId = ride.id;
+
+    await this.prisma.order.update({
+      where: { id: baseOrder.id },
+      data: {
+        rideId,
+      },
     });
+  }
 
-    const batchSuggestions = this.buildBatchSuggestions(order, pendingOrders);
+  const updatedCandidate = await this.prisma.order.update({
+    where: { id: candidateOrderId },
+    data: {
+      rideId,
+      assignedCourierId: courierId,
+      assignedAt: new Date(),
+      status: OrderStatus.ASSIGNED,
+    },
+    include: {
+      courier: true,
+      ride: true,
+    },
+  });
 
-    return {
-        ...order,
-        dispatchPanel: {
-        order: {
-            id: order.id,
-            externalRef: order.externalRef,
-            status: order.status,
-            assignedCourierId: order.assignedCourierId,
-            rideId: order.rideId,
-            pickupLat: order.pickupLat,
-            pickupLng: order.pickupLng,
-            dropoffLat: order.dropoffLat,
-            dropoffLng: order.dropoffLng,
-        },
-        currentAssignment: order.courier
-            ? {
-                courier: {
-                id: order.courier.id,
-                name: order.courier.name,
-                phone: order.courier.phone,
-                availabilityStatus: order.courier.availabilityStatus,
-                },
-                ride: order.ride
-                ? {
-                    id: order.ride.id,
-                    status: order.ride.status,
-                    startedAt: order.ride.startedAt,
-                    }
-                : null,
-            }
-            : null,
-        recommendation,
-        batchSuggestions: {
-            suggestions: batchSuggestions,
-        },
-        },
-        dispatchLogs,
-    };
-    }
+  return {
+    success: true,
+    rideId,
+    order: updatedCandidate,
+  };
+}  
 
   async getOrderDispatchLogs(orderId: string) {
     const order = await this.prisma.order.findUnique({
@@ -1514,6 +1594,8 @@ export class OrdersService {
     };
   }
 
+  
+
   private async getLatestLocationsForCouriers(
     courierIds: string[],
   ): Promise<Map<string, CourierLastLocation>> {
@@ -1623,6 +1705,269 @@ export class OrdersService {
     const minutes = (distanceM / 1000 / avgCourierSpeedKmh) * 60;
     return Math.max(1, Math.round(minutes));
   }
+  private buildBatchStops(order: {
+  id: string;
+  externalRef?: string | null;
+  status: string;
+  pickupLat: number;
+  pickupLng: number;
+  dropoffLat: number;
+  dropoffLng: number;
+}) {
+  const stops: Array<{
+    stopId: string;
+    orderId: string;
+    orderRef?: string | null;
+    type: 'pickup' | 'dropoff';
+    lat: number;
+    lng: number;
+  }> = [];
+
+  if (order.status === OrderStatus.ASSIGNED) {
+    stops.push({
+      stopId: `${order.id}_pickup`,
+      orderId: order.id,
+      orderRef: order.externalRef ?? null,
+      type: 'pickup',
+      lat: order.pickupLat,
+      lng: order.pickupLng,
+    });
+
+    stops.push({
+      stopId: `${order.id}_dropoff`,
+      orderId: order.id,
+      orderRef: order.externalRef ?? null,
+      type: 'dropoff',
+      lat: order.dropoffLat,
+      lng: order.dropoffLng,
+    });
+  }
+
+  if (order.status === OrderStatus.PICKED_UP) {
+    stops.push({
+      stopId: `${order.id}_dropoff`,
+      orderId: order.id,
+      orderRef: order.externalRef ?? null,
+      type: 'dropoff',
+      lat: order.dropoffLat,
+      lng: order.dropoffLng,
+    });
+  }
+
+  return stops;
+}
+
+private buildBatchSequence(
+  orders: Array<{
+    id: string;
+    externalRef?: string | null;
+    status: string;
+    pickupLat: number;
+    pickupLng: number;
+    dropoffLat: number;
+    dropoffLng: number;
+  }>,
+) {
+  const pending = orders.flatMap((order) => this.buildBatchStops(order));
+
+  if (!pending.length) {
+    return [];
+  }
+
+  const result: Array<{
+    stopId: string;
+    orderId: string;
+    orderRef?: string | null;
+    type: 'pickup' | 'dropoff';
+    lat: number;
+    lng: number;
+    sequence: number;
+  }> = [];
+
+  let current = pending.shift()!;
+
+  result.push({
+    ...current,
+    sequence: 1,
+  });
+
+  while (pending.length > 0) {
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < pending.length; i += 1) {
+      const stop = pending[i];
+
+      if (
+        stop.type === 'dropoff' &&
+        !result.some(
+          (existing) =>
+            existing.orderId === stop.orderId && existing.type === 'pickup',
+        )
+      ) {
+        continue;
+      }
+
+      const distance = this.calculateDistanceMeters(
+        current.lat,
+        current.lng,
+        stop.lat,
+        stop.lng,
+      );
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+
+    if (bestIndex === -1) {
+      bestIndex = 0;
+    }
+
+    current = pending.splice(bestIndex, 1)[0];
+
+    result.push({
+      ...current,
+      sequence: result.length + 1,
+    });
+  }
+
+  return result;
+}
+
+private calculateSequenceDistance(
+  sequence: Array<{ lat: number; lng: number }>,
+) {
+  if (sequence.length <= 1) {
+    return 0;
+  }
+
+  let total = 0;
+
+  for (let i = 0; i < sequence.length - 1; i += 1) {
+    total += this.calculateDistanceMeters(
+      sequence[i].lat,
+      sequence[i].lng,
+      sequence[i + 1].lat,
+      sequence[i + 1].lng,
+    );
+  }
+
+  return Math.round(total);
+}
+
+private buildBatchSuggestions(
+  baseOrder: {
+    id: string;
+    externalRef?: string | null;
+    status: string;
+    pickupLat: number;
+    pickupLng: number;
+    dropoffLat: number;
+    dropoffLng: number;
+  },
+  candidates: Array<{
+    id: string;
+    externalRef?: string | null;
+    status: string;
+    pickupLat: number;
+    pickupLng: number;
+    dropoffLat: number;
+    dropoffLng: number;
+    pickupAddress?: string | null;
+    dropoffAddress?: string | null;
+    pickupFormattedAddress?: string | null;
+    dropoffFormattedAddress?: string | null;
+  }>,
+) {
+  const currentSequence = this.buildBatchSequence([
+    { ...baseOrder, status: OrderStatus.ASSIGNED },
+  ]);
+  const currentDistance = this.calculateSequenceDistance(currentSequence);
+
+  return candidates
+    .map((candidate) => {
+      const projectedSequence = this.buildBatchSequence([
+        { ...baseOrder, status: OrderStatus.ASSIGNED },
+        { ...candidate, status: OrderStatus.ASSIGNED },
+      ]);
+
+      const projectedDistance =
+        this.calculateSequenceDistance(projectedSequence);
+      const projectedDetourMeters = Math.max(
+        0,
+        projectedDistance - currentDistance,
+      );
+      const projectedStopCount = projectedSequence.length;
+
+      const reasons: string[] = [];
+
+      if (projectedStopCount > BATCH_RULES.MAX_STOPS) {
+        reasons.push('max_stop_count_exceeded');
+      }
+
+      if (projectedDetourMeters > BATCH_RULES.MAX_DETOUR_METERS) {
+        reasons.push('detour_too_high');
+      }
+
+      const valid = reasons.length === 0;
+      const batchScore = Math.max(
+        0,
+        100 -
+          Math.round(projectedDetourMeters / 100) -
+          Math.max(0, projectedStopCount - 2) * 5,
+      );
+
+      return {
+        order: {
+          id: candidate.id,
+          externalRef: candidate.externalRef ?? null,
+          status: candidate.status,
+          pickupAddress:
+            candidate.pickupFormattedAddress ?? candidate.pickupAddress ?? null,
+          dropoffAddress:
+            candidate.dropoffFormattedAddress ??
+            candidate.dropoffAddress ??
+            null,
+        },
+        batchScore,
+        insertionPreview: {
+          valid,
+          reasons,
+          projectedStopCount,
+          projectedDetourMeters,
+          projectedSequence,
+        },
+      };
+    })
+    .sort((a, b) => b.batchScore - a.batchScore)
+    .slice(0, 10);
+}
+
+  private calculateDistanceMeters(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ) {
+    const toRad = (value: number) => (value * Math.PI) / 180;
+    const earthRadiusM = 6371000;
+
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return earthRadiusM * c;
+  }
 
   private getDelaySeconds(
     estimated: Date | null,
@@ -1648,162 +1993,4 @@ export class OrdersService {
     if (diffSeconds < 0) return 'early';
     return 'on_time';
   }
-
-  // =========================
-    // BATCH ROUTING (SAFE ADD)
-    // =========================
-
-    private calculateDistanceMeters(
-    lat1: number,
-    lng1: number,
-    lat2: number,
-    lng2: number,
-    ) {
-    const toRad = (value: number) => (value * Math.PI) / 180;
-    const R = 6371000;
-
-    const dLat = toRad(lat2 - lat1);
-    const dLng = toRad(lng2 - lng1);
-
-    const a =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(toRad(lat1)) *
-        Math.cos(toRad(lat2)) *
-        Math.sin(dLng / 2) ** 2;
-
-    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    }
-
-    private buildStops(order: any) {
-    const stops: any[] = [];
-
-    if (order.status === 'ASSIGNED') {
-        stops.push({
-        stopId: `${order.id}_pickup`,
-        orderId: order.id,
-        type: 'pickup',
-        lat: order.pickupLat,
-        lng: order.pickupLng,
-        });
-
-        stops.push({
-        stopId: `${order.id}_dropoff`,
-        orderId: order.id,
-        type: 'dropoff',
-        lat: order.dropoffLat,
-        lng: order.dropoffLng,
-        });
-    }
-
-    if (order.status === 'PICKED_UP') {
-        stops.push({
-        stopId: `${order.id}_dropoff`,
-        orderId: order.id,
-        type: 'dropoff',
-        lat: order.dropoffLat,
-        lng: order.dropoffLng,
-        });
-    }
-
-    return stops;
-    }
-
-    private buildSequence(orders: any[]) {
-    const stops = orders.flatMap((o) => this.buildStops(o));
-
-    if (!stops.length) return [];
-
-    const result: any[] = [];
-    const pending = [...stops];
-
-    let current = pending.shift();
-    result.push(current);
-
-    while (pending.length) {
-        let bestIndex = 0;
-        let bestDist = Infinity;
-
-        for (let i = 0; i < pending.length; i++) {
-        const s = pending[i];
-
-        if (
-            s.type === 'dropoff' &&
-            !result.some(
-            (r) => r.orderId === s.orderId && r.type === 'pickup',
-            )
-        ) {
-            continue;
-        }
-
-        const d = this.calculateDistanceMeters(
-            current.lat,
-            current.lng,
-            s.lat,
-            s.lng,
-        );
-
-        if (d < bestDist) {
-            bestDist = d;
-            bestIndex = i;
-        }
-        }
-
-        current = pending.splice(bestIndex, 1)[0];
-        result.push(current);
-    }
-
-    return result.map((s, i) => ({
-        ...s,
-        sequence: i + 1,
-    }));
-    }
-
-    private totalDistance(stops: any[]) {
-    let total = 0;
-
-    for (let i = 0; i < stops.length - 1; i++) {
-        total += this.calculateDistanceMeters(
-        stops[i].lat,
-        stops[i].lng,
-        stops[i + 1].lat,
-        stops[i + 1].lng,
-        );
-    }
-
-    return Math.round(total);
-    }
-
-    private buildBatchSuggestions(targetOrder: any, candidates: any[]) {
-    return candidates.map((candidate) => {
-        const projectedSequence = this.buildSequence([
-        targetOrder,
-        candidate,
-        ]);
-
-        const detour = this.totalDistance(projectedSequence);
-
-        const stopCount = projectedSequence.length;
-
-        const valid = stopCount <= 6 && detour <= 5000;
-
-        return {
-        order: {
-            id: candidate.id,
-            externalRef: candidate.externalRef,
-            pickupAddress:
-            candidate.pickupFormattedAddress ?? candidate.pickupAddress,
-            dropoffAddress:
-            candidate.dropoffFormattedAddress ?? candidate.dropoffAddress,
-        },
-        batchScore: Math.max(0, 100 - Math.round(detour / 100)),
-        insertionPreview: {
-            valid,
-            projectedStopCount: stopCount,
-            projectedDetourMeters: detour,
-            reasons: valid ? [] : ['rule_violation'],
-            projectedSequence,
-        },
-        };
-    });
-    }
 }

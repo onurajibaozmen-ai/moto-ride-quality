@@ -164,6 +164,14 @@ export class OrdersController {
     return this.ordersService.suggestBatchCandidates(id);
   }
 
+  @Post(':id/add-to-ride')
+  addOrderToRide(
+    @Param('id') id: string,
+    @Body() body: { candidateOrderId: string },
+  ) {
+    return this.ordersService.addOrderToRide(id, body.candidateOrderId);
+  }
+
   @Get('rides/:rideId/plan')
   getRidePlan(@Param('rideId') rideId: string) {
     return this.ordersService.getRidePlan(rideId);

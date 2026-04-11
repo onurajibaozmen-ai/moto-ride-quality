@@ -722,6 +722,7 @@ export default async function OrderDetailPage({
               >
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
+                    
                     <div className="text-lg font-semibold text-slate-900">
                       Candidate Order: {suggestion.orderId}
                     </div>
