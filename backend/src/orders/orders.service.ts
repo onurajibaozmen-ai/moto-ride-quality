@@ -781,6 +781,10 @@ if (!rideId) {
     throw new NotFoundException('Order not found');
   }
 
+     if (anchorOrder.status !== OrderStatus.ASSIGNED) {
+  throw new BadRequestException('Order already picked up or invalid state');
+    }
+
   if (anchorOrder.status !== OrderStatus.ASSIGNED) {
     throw new BadRequestException('Order must be ASSIGNED before pickup');
   }
@@ -820,6 +824,9 @@ if (!rideId) {
   > = [];
 
     for (const order of ordersAtSamePickupStop) {
+
+      if (order.status !== OrderStatus.ASSIGNED) continue;
+      
       const updated = await tx.order.update({
         where: { id: order.id },
         data: {
@@ -910,6 +917,12 @@ if (!rideId) {
   if (!courier) {
     throw new NotFoundException('Courier not found');
   }
+
+    const isOnline = this.isCourierOnline(courier.lastSeenAt);
+
+    const availabilityStatus = isOnline
+        ? courier.availabilityStatus
+        : CourierAvailabilityStatus.OFFLINE;
 
   const activeRide = await this.prisma.ride.findFirst({
     where: {
@@ -1518,7 +1531,28 @@ if (!rideId) {
           courier: true,
           ride: true,
         },
+
+        
       });
+
+      const remainingOrders = await tx.order.count({
+  where: {
+    assignedCourierId: order.assignedCourierId,
+    status: {
+      in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
+    },
+  },
+});
+
+if (remainingOrders === 0 && order.assignedCourierId) {
+  await tx.user.update({
+    where: { id: order.assignedCourierId },
+    data: {
+      availabilityStatus: CourierAvailabilityStatus.READY,
+      availabilityUpdatedAt: new Date(),
+    },
+  });
+}
 
       await this.usersService.autoSetCourierDelivery(tx, courierId);
 
@@ -2001,6 +2035,17 @@ private buildBatchSequence(
   }
 
   return result;
+}
+
+private isCourierOnline(lastSeenAt: Date | null) {
+  if (!lastSeenAt) return false;
+
+  const now = new Date();
+  const diff = now.getTime() - new Date(lastSeenAt).getTime();
+
+  const timeoutMs = 60 * 1000; // 60 saniye
+
+  return diff <= timeoutMs;
 }
 
 private calculateSequenceDistance(
