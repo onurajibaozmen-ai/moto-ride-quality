@@ -8,27 +8,21 @@ class CourierPresenceApi {
   Future<void> setOffline(String courierId) async {
     await ApiClient.dio.post(
       '/orders/couriers/$courierId/presence',
-      data: {
-        'state': 'OFFLINE',
-      },
+      data: {'state': 'OFFLINE'},
     );
   }
 
   Future<void> setReady(String courierId) async {
     await ApiClient.dio.post(
       '/orders/couriers/$courierId/presence',
-      data: {
-        'state': 'READY',
-      },
+      data: {'state': 'READY'},
     );
   }
 
   Future<void> setBusy(String courierId) async {
     await ApiClient.dio.post(
       '/orders/couriers/$courierId/presence',
-      data: {
-        'state': 'BUSY',
-      },
+      data: {'state': 'BUSY'},
     );
   }
 }

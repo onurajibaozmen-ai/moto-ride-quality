@@ -1207,6 +1207,40 @@ if (!rideId) {
     };
   }
 
+  private async getCandidateCouriers(
+  excludedCourierIds: string[],
+  statuses: CourierAvailabilityStatus[],
+) {
+  return this.prisma.user.findMany({
+    where: {
+      role: UserRole.COURIER,
+      isActive: true,
+      availabilityStatus: {
+        in: statuses,
+      },
+      id: {
+        notIn: excludedCourierIds,
+      },
+    },
+    include: {
+      rides: {
+        where: {
+          status: RideStatus.ACTIVE,
+        },
+        orderBy: {
+          startedAt: 'desc',
+        },
+        take: 1,
+        include: {
+          orders: true,
+        },
+      },
+    },
+  });
+}
+
+  
+
   async recommendCourier(orderId: string, excludedCourierIds: string[] = []) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -1216,35 +1250,15 @@ if (!rideId) {
       throw new NotFoundException('Order not found');
     }
 
-    const couriers = await this.prisma.user.findMany({
-      where: {
-        role: UserRole.COURIER,
-        isActive: true,
-        availabilityStatus: {
-  in: [
-    CourierAvailabilityStatus.READY,
+    let couriers = await this.getCandidateCouriers(excludedCourierIds, [
+  CourierAvailabilityStatus.READY,
+]);
+
+if (couriers.length === 0) {
+  couriers = await this.getCandidateCouriers(excludedCourierIds, [
     CourierAvailabilityStatus.DELIVERY,
-  ],
-},
-        id: {
-          notIn: excludedCourierIds,
-        },
-      },
-      include: {
-        rides: {
-          where: {
-            status: RideStatus.ACTIVE,
-          },
-          orderBy: {
-            startedAt: 'desc',
-          },
-          take: 1,
-          include: {
-            orders: true,
-          },
-        },
-      },
-    });
+  ]);
+}
 
     const latestLocations = await this.getLatestLocationsForCouriers(
       couriers.map((courier) => courier.id),
@@ -1318,6 +1332,9 @@ if (!rideId) {
           ? activeRide.orders.length * 4
           : 0;
 
+        const readyIntentBonus =
+            courier.availabilityStatus === CourierAvailabilityStatus.READY ? 40 : 0;
+
         const activeOrderCount = activeRide ? activeRide.orders.length : 0;
         const activeStopCount = activeOrderCount * 2;
         const detourMeters =
@@ -1355,7 +1372,8 @@ if (!rideId) {
             routeDistancePriorityScore +
             distanceScore +
             onlineScore +
-            freshnessScore -
+            freshnessScore +
+            readyIntentBonus -
             activeRidePenalty -
             activeRideOrderPenalty -
             staleLocationPenalty -
@@ -2262,6 +2280,18 @@ async updateCourierPresence(
   courierId: string,
   state: 'READY' | 'BUSY' | 'OFFLINE',
 ) {
+  const courier = await this.prisma.user.findFirst({
+    where: {
+      id: courierId,
+      role: UserRole.COURIER,
+      isActive: true,
+    },
+  });
+
+  if (!courier) {
+    throw new NotFoundException('Courier not found');
+  }
+
   if (state === 'OFFLINE') {
     return this.prisma.user.update({
       where: { id: courierId },
@@ -2269,6 +2299,12 @@ async updateCourierPresence(
         availabilityStatus: CourierAvailabilityStatus.OFFLINE,
         availabilityUpdatedAt: new Date(),
         lastSeenAt: new Date(),
+      },
+      select: {
+        id: true,
+        availabilityStatus: true,
+        availabilityUpdatedAt: true,
+        lastSeenAt: true,
       },
     });
   }
@@ -2281,10 +2317,28 @@ async updateCourierPresence(
         availabilityUpdatedAt: new Date(),
         lastSeenAt: new Date(),
       },
+      select: {
+        id: true,
+        availabilityStatus: true,
+        availabilityUpdatedAt: true,
+        lastSeenAt: true,
+      },
     });
   }
 
-  // READY
-  return this.heartbeatCourier(courierId);
+  return this.prisma.user.update({
+    where: { id: courierId },
+    data: {
+      availabilityStatus: CourierAvailabilityStatus.READY,
+      availabilityUpdatedAt: new Date(),
+      lastSeenAt: new Date(),
+    },
+    select: {
+      id: true,
+      availabilityStatus: true,
+      availabilityUpdatedAt: true,
+      lastSeenAt: true,
+    },
+  });
 }
 }
