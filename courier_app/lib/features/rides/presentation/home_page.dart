@@ -399,6 +399,42 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
+  children: [
+    Expanded(
+      child: OutlinedButton.icon(
+        onPressed: () async {
+          try {
+            await _presenceApi.setReady(widget.courierId);
+            _showMessage('Ready for Pickup aktif.');
+            await _bootstrap();
+          } catch (e) {
+            _showMessage('Ready durumu güncellenemedi.');
+          }
+        },
+        icon: const Icon(Icons.play_circle_outline),
+        label: const Text('Ready for Pickup'),
+      ),
+    ),
+    const SizedBox(width: 10),
+    Expanded(
+      child: OutlinedButton.icon(
+        onPressed: () async {
+          try {
+            await _presenceApi.setOffline(widget.courierId);
+            _showMessage('Offline / pause aktif.');
+            await _bootstrap();
+          } catch (e) {
+            _showMessage('Durum güncellenemedi.');
+          }
+        },
+        icon: const Icon(Icons.pause_circle_outline),
+        label: const Text('Pause / Offline'),
+      ),
+    ),
+  ],
+),
+const SizedBox(height: 10),
+                          Row(
                             children: [
                               Expanded(
                                 child: Text(
