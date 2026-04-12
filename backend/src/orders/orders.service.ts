@@ -826,7 +826,7 @@ if (!rideId) {
     for (const order of ordersAtSamePickupStop) {
 
       if (order.status !== OrderStatus.ASSIGNED) continue;
-      
+
       const updated = await tx.order.update({
         where: { id: order.id },
         data: {
@@ -974,7 +974,7 @@ if (!rideId) {
           type: 'pickup',
           lat: nextStop.lat,
           lng: nextStop.lng,
-          availabilityStatus: courier.availabilityStatus,
+          availabilityStatus,
           source: 'active_ride_sequence',
           sequence: nextStop.sequence,
           remainingStopCount: sequence.length,
@@ -1002,7 +1002,7 @@ if (!rideId) {
         type: 'dropoff',
         lat: nextStop.lat,
         lng: nextStop.lng,
-        availabilityStatus: courier.availabilityStatus,
+        availabilityStatus,
         source: 'active_ride_sequence',
         sequence: nextStop.sequence,
         remainingStopCount: sequence.length,
@@ -1056,7 +1056,7 @@ if (!rideId) {
     type,
     lat: type === 'pickup' ? assignedOrder.pickupLat : assignedOrder.dropoffLat,
     lng: type === 'pickup' ? assignedOrder.pickupLng : assignedOrder.dropoffLng,
-    availabilityStatus: courier.availabilityStatus,
+    availabilityStatus,
     source: 'assigned_order_fallback',
     sequence: 1,
     remainingStopCount: 1,
@@ -1220,7 +1220,12 @@ if (!rideId) {
       where: {
         role: UserRole.COURIER,
         isActive: true,
-        availabilityStatus: CourierAvailabilityStatus.READY,
+        availabilityStatus: {
+  in: [
+    CourierAvailabilityStatus.READY,
+    CourierAvailabilityStatus.DELIVERY,
+  ],
+},
         id: {
           notIn: excludedCourierIds,
         },
@@ -1318,6 +1323,8 @@ if (!rideId) {
         const detourMeters =
           pickupDistanceM !== null ? pickupDistanceM * 1.2 : 99999;
 
+
+        
         const batchValidation = this.validateBatchConstraints({
           activeRideOrderCount: activeOrderCount,
           activeStopCount,
@@ -1325,6 +1332,14 @@ if (!rideId) {
           detourMeters,
         });
 
+
+        console.log('COURIER CHECK', {
+  courierId: courier.id,
+  availabilityStatus: courier.availabilityStatus,
+  activeRideId: activeRide?.id ?? null,
+  pickupDistanceM,
+  batchValidation,
+});
         if (!batchValidation.valid) {
           return null;
         }
