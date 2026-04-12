@@ -900,93 +900,172 @@ if (!rideId) {
   }
 
   async getNextStopForCourier(courierId: string) {
-    const courier = await this.prisma.user.findFirst({
-      where: {
-        id: courierId,
-        role: UserRole.COURIER,
-      },
-    });
+  const courier = await this.prisma.user.findFirst({
+    where: {
+      id: courierId,
+      role: UserRole.COURIER,
+    },
+  });
 
-    if (!courier) {
-      throw new NotFoundException('Courier not found');
-    }
+  if (!courier) {
+    throw new NotFoundException('Courier not found');
+  }
 
-    const activeRide = await this.prisma.ride.findFirst({
-      where: {
-        userId: courierId,
-        status: RideStatus.ACTIVE,
-      },
-      include: {
-        orders: {
-          orderBy: {
-            createdAt: 'asc',
-          },
+  const activeRide = await this.prisma.ride.findFirst({
+    where: {
+      userId: courierId,
+      status: RideStatus.ACTIVE,
+    },
+    include: {
+      orders: {
+        orderBy: {
+          createdAt: 'asc',
         },
       },
-    });
+    },
+  });
 
-    if (activeRide) {
-      const nextRideOrder = activeRide.orders.find(
-        (order) =>
-          order.status === OrderStatus.ASSIGNED ||
-          order.status === OrderStatus.PICKED_UP,
-      );
+  if (activeRide) {
+    const activeOrders = activeRide.orders.filter(
+      (order) =>
+        order.status === OrderStatus.ASSIGNED ||
+        order.status === OrderStatus.PICKED_UP,
+    );
 
-      if (nextRideOrder) {
-        const type =
-          nextRideOrder.status === OrderStatus.ASSIGNED ? 'pickup' : 'dropoff';
+    const sequence = this.buildBatchSequence(activeOrders);
+
+    if (sequence.length > 0) {
+      const nextStop = sequence[0];
+
+      if (nextStop.type === 'pickup') {
+        const pickupRadiusMeters = 50;
+
+        const groupedOrders = activeOrders.filter((order) => {
+          if (order.status !== OrderStatus.ASSIGNED) return false;
+
+          const distance = this.calculateDistanceMeters(
+            nextStop.lat,
+            nextStop.lng,
+            order.pickupLat,
+            order.pickupLng,
+          );
+
+          return distance <= pickupRadiusMeters;
+        });
 
         return {
           courierId,
           rideId: activeRide.id,
-          orderId: nextRideOrder.id,
-          externalRef: nextRideOrder.externalRef ?? null,
-          type,
-          lat:
-            type === 'pickup'
-              ? nextRideOrder.pickupLat
-              : nextRideOrder.dropoffLat,
-          lng:
-            type === 'pickup'
-              ? nextRideOrder.pickupLng
-              : nextRideOrder.dropoffLng,
+          orderId: nextStop.orderId,
+          externalRef: nextStop.orderRef ?? null,
+          type: 'pickup',
+          lat: nextStop.lat,
+          lng: nextStop.lng,
           availabilityStatus: courier.availabilityStatus,
-          source: 'active_ride',
+          source: 'active_ride_sequence',
+          sequence: nextStop.sequence,
+          remainingStopCount: sequence.length,
+          stopLabel: 'Pickup Stop',
+          groupedOrders: groupedOrders.map((order) => ({
+            id: order.id,
+            externalRef: order.externalRef ?? null,
+            status: order.status,
+            pickupAddress:
+              order.pickupFormattedAddress ?? order.pickupAddress ?? null,
+            dropoffAddress:
+              order.dropoffFormattedAddress ?? order.dropoffAddress ?? null,
+          })),
+          groupedOrderCount: groupedOrders.length,
         };
       }
+
+      const dropoffOrder = activeOrders.find((order) => order.id === nextStop.orderId);
+
+      return {
+        courierId,
+        rideId: activeRide.id,
+        orderId: nextStop.orderId,
+        externalRef: nextStop.orderRef ?? null,
+        type: 'dropoff',
+        lat: nextStop.lat,
+        lng: nextStop.lng,
+        availabilityStatus: courier.availabilityStatus,
+        source: 'active_ride_sequence',
+        sequence: nextStop.sequence,
+        remainingStopCount: sequence.length,
+        stopLabel: 'Dropoff Stop',
+        groupedOrders: dropoffOrder
+          ? [
+              {
+                id: dropoffOrder.id,
+                externalRef: dropoffOrder.externalRef ?? null,
+                status: dropoffOrder.status,
+                pickupAddress:
+                  dropoffOrder.pickupFormattedAddress ??
+                  dropoffOrder.pickupAddress ??
+                  null,
+                dropoffAddress:
+                  dropoffOrder.dropoffFormattedAddress ??
+                  dropoffOrder.dropoffAddress ??
+                  null,
+              },
+            ]
+          : [],
+        groupedOrderCount: dropoffOrder ? 1 : 0,
+      };
     }
-
-    const assignedOrder = await this.prisma.order.findFirst({
-      where: {
-        assignedCourierId: courierId,
-        status: {
-          in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
-        },
-      },
-      orderBy: {
-        createdAt: 'asc',
-      },
-    });
-
-    if (!assignedOrder) {
-      return null;
-    }
-
-    const type =
-      assignedOrder.status === OrderStatus.ASSIGNED ? 'pickup' : 'dropoff';
-
-    return {
-      courierId,
-      rideId: assignedOrder.rideId ?? null,
-      orderId: assignedOrder.id,
-      externalRef: assignedOrder.externalRef ?? null,
-      type,
-      lat: type === 'pickup' ? assignedOrder.pickupLat : assignedOrder.dropoffLat,
-      lng: type === 'pickup' ? assignedOrder.pickupLng : assignedOrder.dropoffLng,
-      availabilityStatus: courier.availabilityStatus,
-      source: 'assigned_order_fallback',
-    };
   }
+
+  const assignedOrder = await this.prisma.order.findFirst({
+    where: {
+      assignedCourierId: courierId,
+      status: {
+        in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
+      },
+    },
+    orderBy: {
+      createdAt: 'asc',
+    },
+  });
+
+  if (!assignedOrder) {
+    return null;
+  }
+
+  const type =
+    assignedOrder.status === OrderStatus.ASSIGNED ? 'pickup' : 'dropoff';
+
+  return {
+    courierId,
+    rideId: assignedOrder.rideId ?? null,
+    orderId: assignedOrder.id,
+    externalRef: assignedOrder.externalRef ?? null,
+    type,
+    lat: type === 'pickup' ? assignedOrder.pickupLat : assignedOrder.dropoffLat,
+    lng: type === 'pickup' ? assignedOrder.pickupLng : assignedOrder.dropoffLng,
+    availabilityStatus: courier.availabilityStatus,
+    source: 'assigned_order_fallback',
+    sequence: 1,
+    remainingStopCount: 1,
+    stopLabel: type === 'pickup' ? 'Pickup Stop' : 'Dropoff Stop',
+    groupedOrders: [
+      {
+        id: assignedOrder.id,
+        externalRef: assignedOrder.externalRef ?? null,
+        status: assignedOrder.status,
+        pickupAddress:
+          assignedOrder.pickupFormattedAddress ??
+          assignedOrder.pickupAddress ??
+          null,
+        dropoffAddress:
+          assignedOrder.dropoffFormattedAddress ??
+          assignedOrder.dropoffAddress ??
+          null,
+      },
+    ],
+    groupedOrderCount: 1,
+  };
+}
 
   async getRidePlan(rideId: string) {
     const ride = await this.prisma.ride.findUnique({

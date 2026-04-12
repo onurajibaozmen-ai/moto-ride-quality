@@ -21,9 +21,16 @@ class OrdersApi {
     return decoded;
   }
 
+  Future<Map<String, dynamic>> getRidePlan(String rideId) async {
+    final response = await ApiClient.dio.get(
+      '/orders/rides/$rideId/plan',
+    );
+    return _decode(response.data);
+  }
+
   Future<Map<String, dynamic>> pickupOrder(String orderId) async {
     final response = await ApiClient.dio.patch(
-      '/orders/$orderId/pickup',
+      '/orders/$orderId/pickup-all',
       data: {},
     );
     return _decode(response.data);

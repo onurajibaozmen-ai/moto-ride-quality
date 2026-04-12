@@ -173,9 +173,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     setState(() => _pickingUp = true);
 
     try {
-      await _ordersApi.pickupOrder(orderId);
+      final result = await _ordersApi.pickupOrder(orderId);
       await _presenceApi.setBusy(widget.courierId);
-      _showMessage('Pickup başarılı.');
+
+      final pickedUpCount = result['pickedUpCount'];
+
+      _showMessage(
+        pickedUpCount != null
+            ? 'Pickup başarılı. $pickedUpCount order alındı.'
+            : 'Pickup başarılı.',
+      );
+
       await _bootstrap();
     } catch (e) {
       debugPrint('Pickup failed: $e');
@@ -223,28 +231,79 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _openNavigation() async {
+    final rideId = _nextStop?['rideId']?.toString();
     final lat = _nextStop?['lat'];
     final lng = _nextStop?['lng'];
 
-    if (lat == null || lng == null) {
-      _showMessage('Yönlendirme için stop bulunamadı.');
-      return;
-    }
-
-    final googleMapsUrl = Uri.parse(
-      'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng',
-    );
-
-    final geoUrl = Uri.parse('geo:$lat,$lng');
-
-    try {
-      if (await canLaunchUrl(googleMapsUrl)) {
-        await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);
+    if (rideId == null || rideId.isEmpty) {
+      if (lat == null || lng == null) {
+        _showMessage('Yönlendirme için stop bulunamadı.');
         return;
       }
 
-      if (await canLaunchUrl(geoUrl)) {
-        await launchUrl(geoUrl, mode: LaunchMode.externalApplication);
+      final fallbackUrl = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng',
+      );
+
+      if (await canLaunchUrl(fallbackUrl)) {
+        await launchUrl(fallbackUrl, mode: LaunchMode.externalApplication);
+        return;
+      }
+
+      _showMessage('Harita uygulaması açılamadı.');
+      return;
+    }
+
+    try {
+      final ridePlan = await _ordersApi.getRidePlan(rideId);
+      final sequenceRaw =
+          ridePlan['recommendedSequence'] ?? ridePlan['stops'] ?? [];
+
+      final sequence = sequenceRaw is List
+          ? sequenceRaw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList()
+          : <Map<String, dynamic>>[];
+
+      if (sequence.isEmpty) {
+        _showMessage('Rota bulunamadı.');
+        return;
+      }
+
+      final destination = sequence.first;
+      final destinationLat = destination['lat'];
+      final destinationLng = destination['lng'];
+
+      if (destinationLat == null || destinationLng == null) {
+        _showMessage('İlk stop koordinatı eksik.');
+        return;
+      }
+
+      final remaining =
+          sequence.length > 1 ? sequence.sublist(1) : <Map<String, dynamic>>[];
+
+      final waypointPoints = remaining
+          .map((stop) => '${stop['lat']},${stop['lng']}')
+          .where((value) => !value.contains('null'))
+          .take(8)
+          .join('|');
+
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      final origin = '${position.latitude},${position.longitude}';
+      final destinationPoint = '$destinationLat,$destinationLng';
+
+      final googleMapsUrl = Uri.parse(
+        waypointPoints.isNotEmpty
+            ? 'https://www.google.com/maps/dir/?api=1&origin=$origin&destination=$destinationPoint&waypoints=$waypointPoints&travelmode=driving'
+            : 'https://www.google.com/maps/dir/?api=1&origin=$origin&destination=$destinationPoint&travelmode=driving',
+      );
+
+      if (await canLaunchUrl(googleMapsUrl)) {
+        await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);
         return;
       }
 
@@ -276,6 +335,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  Color _statusColor(String? type) {
+    if (type == 'pickup') return Colors.orange;
+    if (type == 'dropoff') return Colors.green;
+    return Colors.blueGrey;
+  }
+
   @override
   Widget build(BuildContext context) {
     final nextStopType = _nextStop?['type']?.toString() ?? '-';
@@ -290,6 +355,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _nextStop?['remainingStopCount']?.toString() ?? '-';
     final availability =
         _formatAvailability(_nextStop?['availabilityStatus']?.toString());
+    final stopLabel = _nextStop?['stopLabel']?.toString() ?? 'Next Stop';
+
+    final groupedOrdersRaw = _nextStop?['groupedOrders'];
+    final groupedOrders = groupedOrdersRaw is List
+        ? groupedOrdersRaw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList()
+        : <Map<String, dynamic>>[];
+
+    final groupedOrderCount = _nextStop?['groupedOrderCount']?.toString() ??
+        groupedOrders.length.toString();
 
     final isPickup = nextStopType == 'pickup';
     final isDropoff = nextStopType == 'dropoff';
@@ -297,6 +374,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Courier App'),
+        actions: [
+          IconButton(
+            onPressed: _bootstrap,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _bootstrap,
@@ -304,6 +387,167 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           padding: const EdgeInsets.all(16),
           children: [
             Card(
+              elevation: 2,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: _loadingNextStop
+                    ? const SizedBox(
+                        height: 180,
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  stopLabel,
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _statusColor(nextStopType)
+                                      .withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  nextStopType.toUpperCase(),
+                                  style: TextStyle(
+                                    color: _statusColor(nextStopType),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text('Primary Order: $nextStopOrder'),
+                          const SizedBox(height: 4),
+                          Text('Availability: $availability'),
+                          Text('Sequence: $nextStopSequence'),
+                          Text('Remaining Stops: $remainingStopCount'),
+                          Text('Orders at Stop: $groupedOrderCount'),
+                          Text('Lat: $nextStopLat'),
+                          Text('Lng: $nextStopLng'),
+                          Text('Source: $nextStopSource'),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: _openNavigation,
+                              icon: const Icon(Icons.navigation),
+                              label: const Text('Open Route Navigation'),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          if (isPickup)
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed:
+                                    !_pickingUp ? _pickupOrder : null,
+                                icon: const Icon(Icons.inventory_2),
+                                label: Text(
+                                  _pickingUp ? 'Picking up...' : 'Pickup All',
+                                ),
+                              ),
+                            ),
+                          if (isDropoff) ...[
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: _deliveryNoteController,
+                              maxLines: 3,
+                              decoration: const InputDecoration(
+                                hintText: 'Teslimat notu gir...',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed:
+                                    !_delivering ? _completeDelivery : null,
+                                icon: const Icon(Icons.check_circle),
+                                label: Text(
+                                  _delivering
+                                      ? 'Saving...'
+                                      : 'Complete Delivery',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              elevation: 1,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Orders at This Stop',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (groupedOrders.isEmpty)
+                      const Text('Bu stop için order bulunamadı.')
+                    else
+                      ...groupedOrders.map(
+                        (order) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${order['externalRef'] ?? order['id']}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text('Status: ${order['status'] ?? '-'}'),
+                                Text(
+                                  'Pickup: ${order['pickupAddress'] ?? '-'}',
+                                ),
+                                Text(
+                                  'Dropoff: ${order['dropoffAddress'] ?? '-'}',
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Card(
+              elevation: 1,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: _loadingOrders
@@ -312,10 +556,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'Assigned Orders',
+                            'All Assigned Orders',
                             style: TextStyle(
                               fontSize: 18,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                           const SizedBox(height: 12),
@@ -325,101 +569,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             ..._assignedOrders.map(
                               (order) => Padding(
                                 padding: const EdgeInsets.only(bottom: 8),
-                                child: Text(
-                                  '${order['externalRef'] ?? order['id']} · ${order['status']}',
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade50,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: Colors.grey.shade300,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    '${order['externalRef'] ?? order['id']} · ${order['status']}',
+                                  ),
                                 ),
                               ),
                             ),
                         ],
                       ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: _loadingNextStop
-                    ? const Center(child: CircularProgressIndicator())
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Next Stop',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Text('Order: $nextStopOrder'),
-                          Text('Type: $nextStopType'),
-                          Text('Availability: $availability'),
-                          Text('Sequence: $nextStopSequence'),
-                          Text('Remaining Stops: $remainingStopCount'),
-                          Text('Lat: $nextStopLat'),
-                          Text('Lng: $nextStopLng'),
-                          Text('Source: $nextStopSource'),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton(
-                              onPressed: _openNavigation,
-                              child: const Text('Open Navigation'),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton(
-                              onPressed: isPickup && !_pickingUp
-                                  ? _pickupOrder
-                                  : null,
-                              child: Text(
-  _pickingUp ? 'Picking up...' : 'Pickup All',
-),
-                            ),
-                          ),
-                        ],
-                      ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Delivery Note',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _deliveryNoteController,
-                      maxLines: 4,
-                      decoration: const InputDecoration(
-                        hintText: 'Teslimat notu gir...',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: isDropoff && !_delivering
-                            ? _completeDelivery
-                            : null,
-                        child: Text(
-                          _delivering ? 'Saving...' : 'Complete Delivery',
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
               ),
             ),
           ],
