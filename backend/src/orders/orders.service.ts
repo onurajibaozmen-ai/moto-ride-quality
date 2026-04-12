@@ -868,43 +868,66 @@ if (!rideId) {
 }
 
   async markDelivered(orderId: string, payload?: { note?: string }) {
-    const order = await this.prisma.order.findUnique({
+  const order = await this.prisma.order.findUnique({
+    where: { id: orderId },
+  });
+
+  if (!order) {
+    throw new NotFoundException('Order not found');
+  }
+
+  if (order.status !== OrderStatus.PICKED_UP) {
+    throw new BadRequestException('Order must be PICKED_UP before delivery');
+  }
+
+  return this.prisma.$transaction(async (tx) => {
+    const now = new Date();
+
+    const updatedOrder = await tx.order.update({
       where: { id: orderId },
+      data: {
+        status: OrderStatus.DELIVERED,
+        deliveredAt: now,
+        actualDeliveryTime: now,
+        deliveryNote: payload?.note ?? null,
+      },
+      include: {
+        courier: true,
+        ride: true,
+      },
     });
 
-    if (!order) {
-      throw new NotFoundException('Order not found');
-    }
-
-    if (order.status !== OrderStatus.PICKED_UP) {
-      throw new BadRequestException('Order must be PICKED_UP before delivery');
-    }
-
-    return this.prisma.$transaction(async (tx) => {
-      const updatedOrder = await tx.order.update({
-        where: { id: orderId },
-        data: {
-          status: OrderStatus.DELIVERED,
-          deliveredAt: new Date(),
-          actualDeliveryTime: new Date(),
-          deliveryNote: payload?.note ?? null,
-        },
-        include: {
-          courier: true,
-          ride: true,
+    if (updatedOrder.rideId) {
+      const remainingActiveOrders = await tx.order.count({
+        where: {
+          rideId: updatedOrder.rideId,
+          status: {
+            in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
+          },
         },
       });
 
-      if (updatedOrder.assignedCourierId) {
-        await this.usersService.autoSetCourierReadyIfIdle(
-          tx,
-          updatedOrder.assignedCourierId,
-        );
+      if (remainingActiveOrders === 0) {
+        await tx.ride.update({
+          where: { id: updatedOrder.rideId },
+          data: {
+            status: RideStatus.COMPLETED,
+            endedAt: now,
+          },
+        });
       }
+    }
 
-      return updatedOrder;
-    });
-  }
+    if (updatedOrder.assignedCourierId) {
+      await this.syncCourierAvailabilityFromWork(
+        updatedOrder.assignedCourierId,
+        tx,
+      );
+    }
+
+    return updatedOrder;
+  });
+}
 
   async getNextStopForCourier(courierId: string) {
   const courier = await this.prisma.user.findFirst({
@@ -1239,6 +1262,42 @@ if (!rideId) {
   });
 }
 
+private async syncCourierAvailabilityFromWork(
+  courierId: string,
+  tx?: Prisma.TransactionClient,
+) {
+  const db = tx ?? this.prisma;
+
+  const activeWorkCount = await db.order.count({
+    where: {
+      assignedCourierId: courierId,
+      status: {
+        in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
+      },
+    },
+  });
+
+  const nextAvailability =
+    activeWorkCount > 0
+      ? CourierAvailabilityStatus.DELIVERY
+      : CourierAvailabilityStatus.READY;
+
+  await db.user.update({
+    where: { id: courierId },
+    data: {
+      availabilityStatus: nextAvailability,
+      availabilityUpdatedAt: new Date(),
+      lastSeenAt: new Date(),
+    },
+  });
+
+  return {
+    courierId,
+    availabilityStatus: nextAvailability,
+    activeWorkCount,
+    lastSeenAt: new Date(),
+  };
+}
   
 
   async recommendCourier(orderId: string, excludedCourierIds: string[] = []) {
