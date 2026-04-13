@@ -173,23 +173,21 @@ async createOrder(payload: {
   > | null = null;
 
   if (trigger.triggerSatisfied) {
-    try {
-      autoRecommendationPreview = await this.recommendCourier(created.id);
-    } catch {
-      autoRecommendationPreview = null;
-    }
+  try {
+    autoRecommendationPreview = await this.recommendCourier(created.id);
+  } catch {
+    autoRecommendationPreview = null;
   }
+}
 
-  let autoDispatchResult: unknown = null;
+let autoDispatchResult: unknown = null;
 
-  if (trigger.triggerSatisfied) {
-    try {
-      autoDispatchResult = await this.autoDispatchOrder(created.id);
-    } catch (error) {
-      console.error('AUTO_DISPATCH_ERROR', error);
-      autoDispatchResult = null;
-    }
-  }
+try {
+  autoDispatchResult = await this.autoDispatchOrder(created.id);
+} catch (error) {
+  console.error('AUTO_DISPATCH_ERROR', error);
+  autoDispatchResult = null;
+}
 
   await this.createDispatchLog({
     orderId: created.id,
