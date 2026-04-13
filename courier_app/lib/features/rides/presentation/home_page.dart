@@ -508,9 +508,7 @@ const SizedBox(height: 10),
                               ),
                             ),
 
-                            Row(
-  children: [
-const SizedBox(height: 10),
+                           
                             const SizedBox(height: 10),
                             SizedBox(
                               width: double.infinity,

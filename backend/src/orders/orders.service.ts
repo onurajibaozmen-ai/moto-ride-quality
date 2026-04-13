@@ -86,8 +86,10 @@ async createOrder(payload: {
   const hasPickupAddress = !!payload.pickupAddress?.trim();
   const hasDropoffAddress = !!payload.dropoffAddress?.trim();
 
-  if ((!hasPickupCoordinates && !hasPickupAddress) ||
-      (!hasDropoffCoordinates && !hasDropoffAddress)) {
+  if (
+    (!hasPickupCoordinates && !hasPickupAddress) ||
+    (!hasDropoffCoordinates && !hasDropoffAddress)
+  ) {
     throw new BadRequestException(
       'Either coordinates or addresses must be provided for pickup and dropoff',
     );
@@ -178,6 +180,17 @@ async createOrder(payload: {
     }
   }
 
+  let autoDispatchResult: unknown = null;
+
+  if (trigger.triggerSatisfied) {
+    try {
+      autoDispatchResult = await this.autoDispatchOrder(created.id);
+    } catch (error) {
+      console.error('AUTO_DISPATCH_ERROR', error);
+      autoDispatchResult = null;
+    }
+  }
+
   await this.createDispatchLog({
     orderId: created.id,
     recommendation: autoRecommendationPreview,
@@ -192,7 +205,20 @@ async createOrder(payload: {
     ...created,
     dispatchTrigger: trigger,
     autoRecommendationPreview,
+    autoDispatchResult,
   };
+}
+
+async autoDispatchAllPending() {
+  const orders = await this.prisma.order.findMany({
+    where: { status: OrderStatus.PENDING },
+  });
+
+  for (const order of orders) {
+    await this.autoDispatchOrder(order.id);
+  }
+
+  return { processed: orders.length };
 }
 
   async listOrders(params: ListOrdersParams) {
@@ -1591,6 +1617,205 @@ if (couriers.length === 0) {
       candidates,
     };
   }
+  async autoDispatchOrder(orderId: string) {
+  const order = await this.prisma.order.findUnique({
+    where: { id: orderId },
+  });
+
+  if (!order) {
+    throw new NotFoundException('Order not found');
+  }
+
+  if (order.status !== OrderStatus.PENDING) {
+    return { skipped: true, reason: 'Order not pending' };
+  }
+
+  const readyCouriers = await this.prisma.user.findMany({
+    where: {
+      role: UserRole.COURIER,
+      isActive: true,
+      availabilityStatus: CourierAvailabilityStatus.READY,
+    },
+    include: {
+      rides: {
+        where: { status: RideStatus.ACTIVE },
+        take: 1,
+        include: { orders: true },
+      },
+    },
+  });
+
+  const latestLocations = await this.getLatestLocationsForCouriers(
+    readyCouriers.map((courier) => courier.id),
+  );
+
+  let bestCourier: (typeof readyCouriers)[number] | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (const courier of readyCouriers) {
+  const location = latestLocations.get(courier.id);
+
+  if (!location?.lat || !location?.lng) continue;
+
+  const distance = this.calculateDistanceMeters(
+    order.pickupLat,
+    order.pickupLng,
+    location.lat,
+    location.lng,
+  );
+
+  const distanceScore = Math.max(0, 5000 - distance) / 50;
+
+  const availabilityBonus =
+    courier.availabilityStatus === CourierAvailabilityStatus.READY ? 50 : 10;
+
+  const activeRide = courier.rides[0];
+  const activeOrders = activeRide?.orders.filter(
+    (o) =>
+      o.status === OrderStatus.ASSIGNED ||
+      o.status === OrderStatus.PICKED_UP,
+  ) ?? [];
+
+  const loadPenalty = activeOrders.length * 15;
+
+  let routeAlignmentBonus = 0;
+
+  if (activeOrders.length > 0) {
+    const lastOrder = activeOrders[activeOrders.length - 1];
+
+    const routeDistance = this.calculateDistanceMeters(
+      lastOrder.dropoffLat,
+      lastOrder.dropoffLng,
+      order.pickupLat,
+      order.pickupLng,
+    );
+
+    if (routeDistance < 1000) {
+      routeAlignmentBonus = 30;
+    }
+  }
+
+  const score =
+    distanceScore +
+    availabilityBonus +
+    routeAlignmentBonus -
+    loadPenalty;
+
+  console.log('AUTO_DISPATCH_SCORE', {
+  orderId: order.id,
+  courierId: courier.id,
+  availability: courier.availabilityStatus,
+  distanceM: Math.round(distance),
+  activeOrderCount: activeOrders.length,
+  score,
+});
+
+
+
+  if (score > bestScore) {
+    bestScore = score;
+    bestCourier = courier;
+    bestDistance = distance;
+  }
+}
+
+
+  if (bestCourier) {
+    const ride = await this.prisma.ride.create({
+      data: {
+        userId: bestCourier.id,
+        status: RideStatus.ACTIVE,
+        startedAt: new Date(),
+      },
+    });
+
+    await this.assignOrder(order.id, {
+      courierId: bestCourier.id,
+      rideId: ride.id,
+    });
+
+    console.log('AUTO_DISPATCH_RESULT', {
+  orderId: order.id,
+  action: 'ASSIGNED_NEW_RIDE',
+  courierId: bestCourier.id,
+  rideId: ride.id,
+  bestScore,
+});
+
+    return {
+      action: 'ASSIGNED_NEW_RIDE',
+      courierId: bestCourier.id,
+      rideId: ride.id,
+      pickupDistanceM: Math.round(bestDistance),
+    };
+  }
+
+  const deliveryCouriers = await this.prisma.user.findMany({
+    where: {
+      role: UserRole.COURIER,
+      isActive: true,
+      availabilityStatus: CourierAvailabilityStatus.DELIVERY,
+    },
+    include: {
+      rides: {
+        where: { status: RideStatus.ACTIVE },
+        take: 1,
+        include: { orders: true },
+      },
+    },
+  });
+
+  for (const courier of deliveryCouriers) {
+    const activeRide = courier.rides[0];
+
+    if (!activeRide) continue;
+
+    const activeOrders = activeRide.orders.filter(
+      (rideOrder) =>
+        rideOrder.status === OrderStatus.ASSIGNED ||
+        rideOrder.status === OrderStatus.PICKED_UP,
+    );
+
+    if (activeOrders.length === 0) {
+      continue;
+    }
+
+    const lastOrder = activeOrders[activeOrders.length - 1];
+
+    const distanceToRoute = this.calculateDistanceMeters(
+      lastOrder.dropoffLat,
+      lastOrder.dropoffLng,
+      order.pickupLat,
+      order.pickupLng,
+    );
+
+    if (distanceToRoute < 1000) {
+      await this.assignOrder(order.id, {
+        courierId: courier.id,
+        rideId: activeRide.id,
+      });
+
+      console.log('AUTO_DISPATCH_BATCH', {
+  orderId: order.id,
+  courierId: courier.id,
+  rideId: activeRide.id,
+  distanceToRouteM: Math.round(distanceToRoute),
+});
+
+      return {
+        action: 'BATCH_ADDED',
+        courierId: courier.id,
+        rideId: activeRide.id,
+        distanceToRouteM: Math.round(distanceToRoute),
+      };
+    }
+  }
+
+  return {
+    action: 'WAITING',
+  };
+}
 
   async autoAssignOrder(orderId: string) {
     const recommendation = await this.recommendCourier(orderId);
