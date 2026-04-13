@@ -953,7 +953,7 @@ if (!rideId) {
   });
 }
 
-  async getNextStopForCourier(courierId: string) {
+async getNextStopForCourier(courierId: string) {
   const courier = await this.prisma.user.findFirst({
     where: {
       id: courierId,
