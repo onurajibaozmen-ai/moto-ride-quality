@@ -967,12 +967,6 @@ if (!rideId) {
     throw new NotFoundException('Courier not found');
   }
 
-    const isOnline = this.isCourierOnline(courier.lastSeenAt);
-
-    const availabilityStatus = isOnline
-        ? courier.availabilityStatus
-        : CourierAvailabilityStatus.OFFLINE;
-
   const activeRide = await this.prisma.ride.findFirst({
     where: {
       userId: courierId,
@@ -987,6 +981,9 @@ if (!rideId) {
     },
   });
 
+  const latestLocations = await this.getLatestLocationsForCouriers([courierId]);
+  const currentLocation = latestLocations.get(courierId);
+
   if (activeRide) {
     const activeOrders = activeRide.orders.filter(
       (order) =>
@@ -994,13 +991,21 @@ if (!rideId) {
         order.status === OrderStatus.PICKED_UP,
     );
 
-    const sequence = this.buildBatchSequence(activeOrders);
+    const sequence = this.buildBatchSequenceFromOrigin(
+      activeOrders,
+      currentLocation?.lat && currentLocation?.lng
+        ? {
+            lat: currentLocation.lat,
+            lng: currentLocation.lng,
+          }
+        : null,
+    );
 
     if (sequence.length > 0) {
       const nextStop = sequence[0];
 
       if (nextStop.type === 'pickup') {
-        const pickupRadiusMeters = 50;
+        const pickupRadiusMeters = 300;
 
         const groupedOrders = activeOrders.filter((order) => {
           if (order.status !== OrderStatus.ASSIGNED) return false;
@@ -1023,7 +1028,7 @@ if (!rideId) {
           type: 'pickup',
           lat: nextStop.lat,
           lng: nextStop.lng,
-          availabilityStatus,
+          availabilityStatus: courier.availabilityStatus,
           source: 'active_ride_sequence',
           sequence: nextStop.sequence,
           remainingStopCount: sequence.length,
@@ -1051,7 +1056,7 @@ if (!rideId) {
         type: 'dropoff',
         lat: nextStop.lat,
         lng: nextStop.lng,
-        availabilityStatus,
+        availabilityStatus: courier.availabilityStatus,
         source: 'active_ride_sequence',
         sequence: nextStop.sequence,
         remainingStopCount: sequence.length,
@@ -1105,7 +1110,7 @@ if (!rideId) {
     type,
     lat: type === 'pickup' ? assignedOrder.pickupLat : assignedOrder.dropoffLat,
     lng: type === 'pickup' ? assignedOrder.pickupLng : assignedOrder.dropoffLng,
-    availabilityStatus,
+    availabilityStatus: courier.availabilityStatus,
     source: 'assigned_order_fallback',
     sequence: 1,
     remainingStopCount: 1,
@@ -1286,6 +1291,121 @@ if (!rideId) {
       },
     },
   });
+}
+
+private async findBestPrePickupRide(order: {
+  id: string;
+  pickupLat: number;
+  pickupLng: number;
+  dropoffLat: number;
+  dropoffLng: number;
+}) {
+  const activeRides = await this.prisma.ride.findMany({
+    where: {
+      status: RideStatus.ACTIVE,
+    },
+    include: {
+      user: true,
+      orders: true,
+    },
+  });
+
+  let bestRide:
+    | {
+        rideId: string;
+        courierId: string;
+        score: number;
+        pickupDistanceM: number;
+      }
+    | null = null;
+
+  for (const ride of activeRides) {
+    if (!ride.user) continue;
+
+    const activeOrders = ride.orders.filter(
+      (rideOrder) =>
+        rideOrder.status === OrderStatus.ASSIGNED ||
+        rideOrder.status === OrderStatus.PICKED_UP,
+    );
+
+    if (activeOrders.length === 0) {
+      continue;
+    }
+
+    const hasPickedUpOrder = activeOrders.some(
+      (rideOrder) => rideOrder.status === OrderStatus.PICKED_UP,
+    );
+
+    const assignedOrders = activeOrders.filter(
+      (rideOrder) => rideOrder.status === OrderStatus.ASSIGNED,
+    );
+
+    if (assignedOrders.length === 0) {
+      continue;
+    }
+
+    const pickupAnchor = assignedOrders[0];
+
+    const pickupDistance = this.calculateDistanceMeters(
+      pickupAnchor.pickupLat,
+      pickupAnchor.pickupLng,
+      order.pickupLat,
+      order.pickupLng,
+    );
+
+    if (pickupDistance > 300) {
+      continue;
+    }
+
+    const projectedOrders = [
+      ...activeOrders.map((rideOrder) => ({
+        id: rideOrder.id,
+        externalRef: rideOrder.externalRef ?? null,
+        status: rideOrder.status,
+        pickupLat: rideOrder.pickupLat,
+        pickupLng: rideOrder.pickupLng,
+        dropoffLat: rideOrder.dropoffLat,
+        dropoffLng: rideOrder.dropoffLng,
+      })),
+      {
+        id: order.id,
+        externalRef: null,
+        status: OrderStatus.ASSIGNED,
+        pickupLat: order.pickupLat,
+        pickupLng: order.pickupLng,
+        dropoffLat: order.dropoffLat,
+        dropoffLng: order.dropoffLng,
+      },
+    ];
+
+    const projectedSequence = this.buildBatchSequence(projectedOrders);
+    const projectedStopCount = projectedSequence.length;
+
+    if (projectedStopCount > 8) {
+      continue;
+    }
+
+    let score = 100;
+
+    // Aynı pickup ve pickup henüz yapılmadıysa büyük bonus
+    if (!hasPickedUpOrder) {
+      score += 50;
+    }
+
+    score -= pickupDistance / 20;
+    score -= activeOrders.length * 5;
+
+    if (!bestRide || score > bestRide.score) {
+      bestRide = {
+        rideId: ride.id,
+        courierId: ride.user.id,
+        score,
+        pickupDistanceM: Math.round(pickupDistance),
+      };
+    }
+  }
+
+  return bestRide;
 }
 
 private async syncCourierAvailabilityFromWork(
@@ -1720,6 +1840,31 @@ if (couriers.length === 0) {
   }
 }
 
+const prePickupRide = await this.findBestPrePickupRide(order);
+
+if (prePickupRide) {
+  await this.assignOrder(order.id, {
+    courierId: prePickupRide.courierId,
+    rideId: prePickupRide.rideId,
+  });
+
+  console.log('AUTO_DISPATCH_PRE_PICKUP_BATCH', {
+    orderId: order.id,
+    courierId: prePickupRide.courierId,
+    rideId: prePickupRide.rideId,
+    pickupDistanceM: prePickupRide.pickupDistanceM,
+    score: prePickupRide.score,
+  });
+
+  return {
+    action: 'PRE_PICKUP_BATCH_ADDED',
+    courierId: prePickupRide.courierId,
+    rideId: prePickupRide.rideId,
+    pickupDistanceM: prePickupRide.pickupDistanceM,
+    score: prePickupRide.score,
+  };
+}
+
 
   if (bestCourier) {
     const ride = await this.prisma.ride.create({
@@ -1811,6 +1956,10 @@ if (couriers.length === 0) {
       };
     }
   }
+
+  console.log('AUTO_DISPATCH_NO_MATCH', {
+  orderId: order.id,
+});
 
   return {
     action: 'WAITING',
@@ -2303,6 +2452,128 @@ private buildBatchSequence(
   }> = [];
 
   let current = pending.shift()!;
+
+  result.push({
+    ...current,
+    sequence: 1,
+  });
+
+  while (pending.length > 0) {
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < pending.length; i += 1) {
+      const stop = pending[i];
+
+      if (
+        stop.type === 'dropoff' &&
+        !result.some(
+          (existing) =>
+            existing.orderId === stop.orderId && existing.type === 'pickup',
+        )
+      ) {
+        continue;
+      }
+
+      const distance = this.calculateDistanceMeters(
+        current.lat,
+        current.lng,
+        stop.lat,
+        stop.lng,
+      );
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+
+    if (bestIndex === -1) {
+      bestIndex = 0;
+    }
+
+    current = pending.splice(bestIndex, 1)[0];
+
+    result.push({
+      ...current,
+      sequence: result.length + 1,
+    });
+  }
+
+  return result;
+}
+
+private buildBatchSequenceFromOrigin(
+  orders: Array<{
+    id: string;
+    externalRef?: string | null;
+    status: string;
+    pickupLat: number;
+    pickupLng: number;
+    dropoffLat: number;
+    dropoffLng: number;
+  }>,
+  origin?: { lat: number; lng: number } | null,
+) {
+  const pending = orders.flatMap((order) => this.buildBatchStops(order));
+
+  if (!pending.length) {
+    return [];
+  }
+
+  const result: Array<{
+    stopId: string;
+    orderId: string;
+    orderRef?: string | null;
+    type: 'pickup' | 'dropoff';
+    lat: number;
+    lng: number;
+    sequence: number;
+  }> = [];
+
+  let current:
+    | {
+        stopId: string;
+        orderId: string;
+        orderRef?: string | null;
+        type: 'pickup' | 'dropoff';
+        lat: number;
+        lng: number;
+      }
+    | undefined;
+
+  if (origin) {
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < pending.length; i += 1) {
+      const stop = pending[i];
+
+      if (stop.type === 'dropoff') {
+        continue;
+      }
+
+      const distance = this.calculateDistanceMeters(
+        origin.lat,
+        origin.lng,
+        stop.lat,
+        stop.lng,
+      );
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+
+    if (bestIndex >= 0) {
+      current = pending.splice(bestIndex, 1)[0];
+    }
+  }
+
+  if (!current) {
+    current = pending.shift()!;
+  }
 
   result.push({
     ...current,
