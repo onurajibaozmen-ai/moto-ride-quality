@@ -1306,7 +1306,11 @@ private async findBestPrePickupRide(order: {
     },
     include: {
       user: true,
-      orders: true,
+      orders: {
+        orderBy: {
+          createdAt: 'asc',
+        },
+      },
     },
   });
 
@@ -1316,27 +1320,26 @@ private async findBestPrePickupRide(order: {
         courierId: string;
         score: number;
         pickupDistanceM: number;
+        activeAssignedCount: number;
       }
     | null = null;
 
   for (const ride of activeRides) {
-    if (!ride.user) continue;
+    if (!ride.user) {
+      continue;
+    }
 
-    const activeOrders = ride.orders.filter(
+    const openOrders = ride.orders.filter(
       (rideOrder) =>
         rideOrder.status === OrderStatus.ASSIGNED ||
         rideOrder.status === OrderStatus.PICKED_UP,
     );
 
-    if (activeOrders.length === 0) {
+    if (openOrders.length === 0) {
       continue;
     }
 
-    const hasPickedUpOrder = activeOrders.some(
-      (rideOrder) => rideOrder.status === OrderStatus.PICKED_UP,
-    );
-
-    const assignedOrders = activeOrders.filter(
+    const assignedOrders = openOrders.filter(
       (rideOrder) => rideOrder.status === OrderStatus.ASSIGNED,
     );
 
@@ -1344,6 +1347,8 @@ private async findBestPrePickupRide(order: {
       continue;
     }
 
+    // Bu ride'da pickup penceresi hâlâ açık mı?
+    // En az bir ASSIGNED order varsa açık kabul ediyoruz.
     const pickupAnchor = assignedOrders[0];
 
     const pickupDistance = this.calculateDistanceMeters(
@@ -1353,12 +1358,21 @@ private async findBestPrePickupRide(order: {
       order.pickupLng,
     );
 
-    if (pickupDistance > 300) {
+    // Adres bazlı geocoding sapmaları için toleransı biraz geniş tut
+    const pickupRadiusMeters = 500;
+
+    if (pickupDistance > pickupRadiusMeters) {
+      console.log('PRE_PICKUP_RIDE_SKIP_DISTANCE', {
+        orderId: order.id,
+        rideId: ride.id,
+        courierId: ride.user.id,
+        pickupDistanceM: Math.round(pickupDistance),
+      });
       continue;
     }
 
     const projectedOrders = [
-      ...activeOrders.map((rideOrder) => ({
+      ...openOrders.map((rideOrder) => ({
         id: rideOrder.id,
         externalRef: rideOrder.externalRef ?? null,
         status: rideOrder.status,
@@ -1369,7 +1383,7 @@ private async findBestPrePickupRide(order: {
       })),
       {
         id: order.id,
-        externalRef: null,
+        externalRef: order.id,
         status: OrderStatus.ASSIGNED,
         pickupLat: order.pickupLat,
         pickupLng: order.pickupLng,
@@ -1381,19 +1395,34 @@ private async findBestPrePickupRide(order: {
     const projectedSequence = this.buildBatchSequence(projectedOrders);
     const projectedStopCount = projectedSequence.length;
 
+    // Çok büyüyen ride'ları ele
     if (projectedStopCount > 8) {
+      console.log('PRE_PICKUP_RIDE_SKIP_STOPS', {
+        orderId: order.id,
+        rideId: ride.id,
+        courierId: ride.user.id,
+        projectedStopCount,
+      });
       continue;
     }
 
+    // Basit skor:
+    // yakın pickup + az açık iş + ASSIGNED pencere bonusu
     let score = 100;
+    score += 40; // pickup window açık bonusu
+    score -= pickupDistance / 25;
+    score -= openOrders.length * 5;
 
-    // Aynı pickup ve pickup henüz yapılmadıysa büyük bonus
-    if (!hasPickedUpOrder) {
-      score += 50;
-    }
-
-    score -= pickupDistance / 20;
-    score -= activeOrders.length * 5;
+    console.log('PRE_PICKUP_RIDE_SCORE', {
+      orderId: order.id,
+      rideId: ride.id,
+      courierId: ride.user.id,
+      pickupDistanceM: Math.round(pickupDistance),
+      openOrders: openOrders.length,
+      assignedOrders: assignedOrders.length,
+      projectedStopCount,
+      score,
+    });
 
     if (!bestRide || score > bestRide.score) {
       bestRide = {
@@ -1401,6 +1430,7 @@ private async findBestPrePickupRide(order: {
         courierId: ride.user.id,
         score,
         pickupDistanceM: Math.round(pickupDistance),
+        activeAssignedCount: assignedOrders.length,
       };
     }
   }
