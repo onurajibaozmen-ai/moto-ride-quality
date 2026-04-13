@@ -792,6 +792,23 @@ if (!rideId) {
         );
       }
 
+      let shouldRetryPendingDispatch = false;
+
+if (updatedOrder.assignedCourierId) {
+  const remainingActiveOrdersForCourier = await tx.order.count({
+    where: {
+      assignedCourierId: updatedOrder.assignedCourierId,
+      status: {
+        in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
+      },
+    },
+  });
+
+  if (remainingActiveOrdersForCourier === 0) {
+    shouldRetryPendingDispatch = true;
+  }
+}
+
       return updatedOrder;
     });
   }
@@ -904,10 +921,12 @@ if (!rideId) {
     throw new BadRequestException('Order must be PICKED_UP before delivery');
   }
 
-  return this.prisma.$transaction(async (tx) => {
+  let shouldRetryPendingDispatch = false;
+
+  const updatedOrder = await this.prisma.$transaction(async (tx) => {
     const now = new Date();
 
-    const updatedOrder = await tx.order.update({
+    const deliveredOrder = await tx.order.update({
       where: { id: orderId },
       data: {
         status: OrderStatus.DELIVERED,
@@ -921,10 +940,10 @@ if (!rideId) {
       },
     });
 
-    if (updatedOrder.rideId) {
+    if (deliveredOrder.rideId) {
       const remainingActiveOrders = await tx.order.count({
         where: {
-          rideId: updatedOrder.rideId,
+          rideId: deliveredOrder.rideId,
           status: {
             in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
           },
@@ -933,7 +952,7 @@ if (!rideId) {
 
       if (remainingActiveOrders === 0) {
         await tx.ride.update({
-          where: { id: updatedOrder.rideId },
+          where: { id: deliveredOrder.rideId },
           data: {
             status: RideStatus.COMPLETED,
             endedAt: now,
@@ -942,15 +961,43 @@ if (!rideId) {
       }
     }
 
-    if (updatedOrder.assignedCourierId) {
-      await this.syncCourierAvailabilityFromWork(
-        updatedOrder.assignedCourierId,
-        tx,
-      );
+    if (deliveredOrder.assignedCourierId) {
+      const activeWorkCount = await tx.order.count({
+        where: {
+          assignedCourierId: deliveredOrder.assignedCourierId,
+          status: {
+            in: [OrderStatus.ASSIGNED, OrderStatus.PICKED_UP],
+          },
+        },
+      });
+
+      const nextAvailability =
+        activeWorkCount > 0
+          ? CourierAvailabilityStatus.DELIVERY
+          : CourierAvailabilityStatus.READY;
+
+      await tx.user.update({
+        where: { id: deliveredOrder.assignedCourierId },
+        data: {
+          availabilityStatus: nextAvailability,
+          availabilityUpdatedAt: now,
+          lastSeenAt: now,
+        },
+      });
+
+      if (nextAvailability === CourierAvailabilityStatus.READY) {
+        shouldRetryPendingDispatch = true;
+      }
     }
 
-    return updatedOrder;
+    return deliveredOrder;
   });
+
+  if (shouldRetryPendingDispatch) {
+    await this.autoDispatchPendingOrders(10);
+  }
+
+  return updatedOrder;
 }
 
 async getNextStopForCourier(courierId: string) {
@@ -1471,6 +1518,45 @@ private async syncCourierAvailabilityFromWork(
     activeWorkCount,
     lastSeenAt: new Date(),
   };
+}
+
+private async autoDispatchPendingOrders(limit = 5) {
+  const pendingOrders = await this.prisma.order.findMany({
+    where: {
+      status: OrderStatus.PENDING,
+    },
+    orderBy: {
+      createdAt: 'asc',
+    },
+    take: limit,
+  });
+
+  const results: Array<{
+    orderId: string;
+    result: unknown;
+  }> = [];
+
+  for (const pendingOrder of pendingOrders) {
+    try {
+      const result = await this.autoDispatchOrder(pendingOrder.id);
+      results.push({
+        orderId: pendingOrder.id,
+        result,
+      });
+    } catch (error) {
+      console.error('AUTO_DISPATCH_PENDING_ERROR', {
+        orderId: pendingOrder.id,
+        error,
+      });
+
+      results.push({
+        orderId: pendingOrder.id,
+        result: null,
+      });
+    }
+  }
+
+  return results;
 }
   
 
@@ -2849,6 +2935,8 @@ private buildBatchSuggestions(
       ? CourierAvailabilityStatus.DELIVERY
       : CourierAvailabilityStatus.READY;
 
+  
+
   return this.prisma.user.update({
     where: { id: courierId },
     data: {
@@ -2909,19 +2997,23 @@ async updateCourierPresence(
     });
   }
 
-  return this.prisma.user.update({
-    where: { id: courierId },
-    data: {
-      availabilityStatus: CourierAvailabilityStatus.READY,
-      availabilityUpdatedAt: new Date(),
-      lastSeenAt: new Date(),
-    },
-    select: {
-      id: true,
-      availabilityStatus: true,
-      availabilityUpdatedAt: true,
-      lastSeenAt: true,
-    },
-  });
+  const updatedCourier = await this.prisma.user.update({
+  where: { id: courierId },
+  data: {
+    availabilityStatus: CourierAvailabilityStatus.READY,
+    availabilityUpdatedAt: new Date(),
+    lastSeenAt: new Date(),
+  },
+  select: {
+    id: true,
+    availabilityStatus: true,
+    availabilityUpdatedAt: true,
+    lastSeenAt: true,
+  },
+});
+
+await this.autoDispatchPendingOrders(10);
+
+return updatedCourier;
 }
 }
